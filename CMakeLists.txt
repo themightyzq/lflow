@@ -48,7 +48,8 @@ juce_generate_juce_header(LFlOw)
 target_sources(LFlOw PRIVATE
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
-    source/params/ParameterLayout.cpp)
+    source/params/ParameterLayout.cpp
+    source/gui/LfoDisplay.cpp)
 
 target_include_directories(LFlOw PRIVATE source source/params source/dsp source/gui)
 

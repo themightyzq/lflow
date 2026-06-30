@@ -79,7 +79,9 @@ FetchContent_Declare(Catch2
 FetchContent_MakeAvailable(Catch2)
 
 add_executable(lflow_tests
-    tests/SanityTests.cpp)
+    tests/SanityTests.cpp
+    tests/LfoCoreTests.cpp)
+target_include_directories(lflow_tests PRIVATE source/dsp)
 target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain)
 target_compile_features(lflow_tests PRIVATE cxx_std_17)
 

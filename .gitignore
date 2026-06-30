@@ -5,3 +5,4 @@ JUCE/
 *.vst3
 *.component
 .cache/
+.superpowers/

@@ -71,3 +71,18 @@ target_link_libraries(LFlOw PRIVATE
 
 # ---- Tests (added in Task 3) ----
 enable_testing()
+
+FetchContent_Declare(Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.5.2
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(Catch2)
+
+add_executable(lflow_tests
+    tests/SanityTests.cpp)
+target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain)
+target_compile_features(lflow_tests PRIVATE cxx_std_17)
+
+include(CTest)
+include(Catch)
+catch_discover_tests(lflow_tests)

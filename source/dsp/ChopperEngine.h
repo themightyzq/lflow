@@ -37,7 +37,8 @@ public:
 private:
     float onePole (float target, float& state) const noexcept;
 
-    LfoCore  lfo;
+    LfoCore  lfo;     // left / mono channel
+    LfoCore  lfoR;    // right channel in Pan mode (independent S&H state)
     LfoClock clock;
     ChopperParams params;
 

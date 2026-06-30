@@ -60,3 +60,29 @@ TEST_CASE ("pan mode drives L and R in antiphase", "[engine]")
     REQUIRE_THAT (l[0], WithinAbs (0.0, 1e-5));
     REQUIRE_THAT (r[0], WithinAbs (1.0, 1e-5));
 }
+
+TEST_CASE ("sample & hold in pan mode steps independently per channel", "[engine]")
+{
+    ChopperEngine e; e.prepare (1000.0, 1024); e.reset();
+    auto p = baseParams();
+    p.waveform = Waveform::SampleHold;
+    p.mode     = Mode::Pan;
+    p.smooth   = 0.0f;
+    e.setParams (p);
+
+    std::vector<float> l (1000, 1.0f), r (1000, 1.0f);
+    float* chans[2] = { l.data(), r.data() };
+    e.process (chans, 2, 1000);
+
+    // L's phase runs 0..1 across the block (wrap only at sample 0): one held
+    // S&H value for the whole cycle, so every L sample shares one gain.
+    for (int n = 1; n < 1000; ++n)
+        REQUIRE_THAT (l[n], WithinAbs (l[0], 1e-6));
+
+    // R's phase is offset half a cycle, so it wraps once at sample 500:
+    // constant within [0,499] and within [500,999].
+    for (int n = 1; n < 500; ++n)
+        REQUIRE_THAT (r[n], WithinAbs (r[0], 1e-6));
+    for (int n = 501; n < 1000; ++n)
+        REQUIRE_THAT (r[n], WithinAbs (r[500], 1e-6));
+}

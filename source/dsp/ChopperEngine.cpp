@@ -14,6 +14,7 @@ void ChopperEngine::reset() noexcept
 {
     clock.reset (0.0);
     lfo.reset();
+    lfoR.reset (0xA5A5A5u);
     smoothL = smoothR = 0.0f;
     currentValue = 0.0f;
 }
@@ -39,6 +40,7 @@ float ChopperEngine::onePole (float target, float& state) const noexcept
 void ChopperEngine::process (float* const* channels, int numChannels, int numSamples) noexcept
 {
     lfo.setWaveform (params.waveform);
+    lfoR.setWaveform (params.waveform);
 
     const double rate = params.sync ? LfoClock::syncedHz (hostBpm, params.cycleBeats)
                                     : params.rateHz;
@@ -59,7 +61,7 @@ void ChopperEngine::process (float* const* channels, int numChannels, int numSam
         if (doPan)
         {
             const float phR  = (ph < 0.5f) ? ph + 0.5f : ph - 0.5f;
-            const float modR = onePole (lfo.valueAt (phR), smoothR);
+            const float modR = onePole (lfoR.valueAt (phR), smoothR);
             const float gL = 1.0f - depth * modL;
             const float gR = 1.0f - depth * modR;
 

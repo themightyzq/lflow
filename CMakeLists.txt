@@ -47,7 +47,10 @@ juce_generate_juce_header(LFlOw)
 
 target_sources(LFlOw PRIVATE
     source/PluginProcessor.cpp
-    source/PluginEditor.cpp)
+    source/PluginEditor.cpp
+    source/params/ParameterLayout.cpp)
+
+target_include_directories(LFlOw PRIVATE source source/params source/dsp source/gui)
 
 target_compile_definitions(LFlOw PUBLIC
     JUCE_WEB_BROWSER=0

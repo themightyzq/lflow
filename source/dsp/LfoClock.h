@@ -30,6 +30,7 @@ public:
     {
         phase += rateHz / sampleRate;
         phase -= std::floor (phase + 1e-14);  // +epsilon handles floating-point accumulation errors
+        if (phase < 0.0) phase = 0.0;
         return phase;
     }
 

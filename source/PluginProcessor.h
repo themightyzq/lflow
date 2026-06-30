@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include "dsp/ChopperEngine.h"
+#include <atomic>
 
 class LFlOwAudioProcessor : public juce::AudioProcessor
 {
@@ -27,9 +29,21 @@ public:
     const juce::String getProgramName (int) override { return {}; }
     void changeProgramName (int, const juce::String&) override {}
 
-    void getStateInformation (juce::MemoryBlock&) override {}
-    void setStateInformation (const void*, int) override {}
+    void getStateInformation (juce::MemoryBlock&) override;
+    void setStateInformation (const void*, int) override;
+
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
+
+    juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
+    float getLfoPhase() const noexcept { return lfoPhaseAtomic.load(); }
+    float getLfoValue() const noexcept { return lfoValueAtomic.load(); }
 
 private:
+    juce::AudioProcessorValueTreeState apvts;
+    juce::AudioProcessorParameter* bypassParam { nullptr };
+    lflow::ChopperEngine engine;
+    std::atomic<float> lfoPhaseAtomic { 0.0f };
+    std::atomic<float> lfoValueAtomic { 0.0f };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFlOwAudioProcessor)
 };

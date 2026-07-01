@@ -17,7 +17,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         StringArray { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" }, 0));
 
     layout.add (std::make_unique<AudioParameterBool> (
-        ParameterID { pid::sync, 1 }, "Sync", true));
+        ParameterID { pid::sync, 1 }, "Sync", false));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { pid::rateHz, 1 }, "Rate",

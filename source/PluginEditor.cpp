@@ -52,6 +52,8 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     { display.setWaveform (static_cast<lflow::Waveform> (waveformBox.getSelectedItemIndex())); };
     display.setWaveform (static_cast<lflow::Waveform> (juce::jmax (0, waveformBox.getSelectedItemIndex())));
 
+    refreshSyncEnablement();
+
     setSize (560, 440);
     startTimerHz (60);
 }
@@ -67,9 +69,21 @@ void LFlOwAudioProcessorEditor::styleRotary (juce::Slider& s)
     s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 18);
 }
 
+void LFlOwAudioProcessorEditor::refreshSyncEnablement()
+{
+    const bool syncOn = processorRef.getAPVTS().getRawParameterValue (lflow::pid::sync)->load() > 0.5f;
+    // Rate (Hz) is used only when Sync is off; Division + Rhythm only when Sync is on.
+    // setEnabled early-outs when the state is unchanged, so calling this each timer tick is cheap.
+    rateSlider.setEnabled (! syncOn);
+    rateLabel.setEnabled  (! syncOn);
+    divisionBox.setEnabled (syncOn);
+    rhythmBox.setEnabled   (syncOn);
+}
+
 void LFlOwAudioProcessorEditor::timerCallback()
 {
     display.setPosition (processorRef.getLfoPhase(), processorRef.getLfoValue());
+    refreshSyncEnablement();
 }
 
 void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)

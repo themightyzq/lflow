@@ -36,6 +36,9 @@ private:
                 mixLabel  { {}, "Mix" },  smoothLabel { {}, "Smooth" };
 
     void styleRotary (juce::Slider&);
+    // Enable only the rate controls that apply to the current Sync state:
+    // Rate (Hz) when Sync is off; Division + Rhythm when Sync is on.
+    void refreshSyncEnablement();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFlOwAudioProcessorEditor)
 };

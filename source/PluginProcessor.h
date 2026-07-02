@@ -1,6 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
-#include "dsp/ChopperEngine.h"
+#include "dsp/MultiLaneEngine.h"
 #include <atomic>
 
 class LFlOwAudioProcessor : public juce::AudioProcessor
@@ -35,15 +35,26 @@ public:
     juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
-    float getLfoPhase() const noexcept { return lfoPhaseAtomic.load(); }
-    float getLfoValue() const noexcept { return lfoValueAtomic.load(); }
+
+    float getLanePhase (int lane) const noexcept
+    {
+        return (lane >= 0 && lane < lflow::MultiLaneEngine::kNumLanes) ? lanePhaseAtomic[(size_t) lane].load() : 0.0f;
+    }
+    float getLaneValue (int lane) const noexcept
+    {
+        return (lane >= 0 && lane < lflow::MultiLaneEngine::kNumLanes) ? laneValueAtomic[(size_t) lane].load() : 0.0f;
+    }
 
 private:
     juce::AudioProcessorValueTreeState apvts;
     juce::AudioProcessorParameter* bypassParam { nullptr };
-    lflow::ChopperEngine engine;
-    std::atomic<float> lfoPhaseAtomic { 0.0f };
-    std::atomic<float> lfoValueAtomic { 0.0f };
+    lflow::MultiLaneEngine engine;
+
+    juce::SmoothedValue<float> bypassGain;
+    juce::AudioBuffer<float> dryScratch;
+
+    std::atomic<float> lanePhaseAtomic[lflow::MultiLaneEngine::kNumLanes] {};
+    std::atomic<float> laneValueAtomic[lflow::MultiLaneEngine::kNumLanes] {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFlOwAudioProcessor)
 };

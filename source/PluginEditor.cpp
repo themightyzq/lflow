@@ -8,51 +8,16 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     auto& apvts = processorRef.getAPVTS();
 
     addAndMakeVisible (display);
-
-    waveformBox.addItemList ({ "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" }, 1);
-    divisionBox.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 1);
-    rhythmBox.addItemList   ({ "Straight", "Dotted", "Triplet" }, 1);
-    modeBox.addItemList     ({ "Tremolo", "Pan" }, 1);
-    for (auto* b : { &waveformBox, &divisionBox, &rhythmBox, &modeBox }) addAndMakeVisible (b);
-
-    addAndMakeVisible (syncButton);
+    // Placeholder: show lane 1's motion only. Task 3 replaces this with the full
+    // 3-lane-overlay display driven by all lanes' waveforms/phases/values.
+    display.setWaveform (lflow::Waveform::Sine);
 
     bypassButton.setClickingTogglesState (true);
     bypassButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LFlOwLookAndFeel::Colors::primary));
+    bypassButton.setTooltip ("Bypass the effect, passing audio through unchanged");
     addAndMakeVisible (bypassButton);
 
-    for (auto* s : { &rateSlider, &depthSlider, &mixSlider, &smoothSlider }) { styleRotary (*s); addAndMakeVisible (s); }
-    for (auto* l : { &rateLabel, &depthLabel, &mixLabel, &smoothLabel })
-    { l->setJustificationType (juce::Justification::centred); addAndMakeVisible (l); }
-
-    // Tooltips — describe what each control DOES (ASCII only).
-    waveformBox.setTooltip ("Shape of the LFO motion");
-    syncButton.setTooltip  ("Lock the LFO speed to host tempo");
-    divisionBox.setTooltip ("Note value per LFO cycle when Sync is on");
-    rhythmBox.setTooltip   ("Straight, dotted, or triplet feel for the synced rate");
-    modeBox.setTooltip     ("Tremolo modulates volume; Pan sweeps left-right");
-    bypassButton.setTooltip ("Bypass the effect, passing audio through unchanged");
-    rateSlider.setTooltip  ("LFO speed in Hz when Sync is off");
-    depthSlider.setTooltip ("How strongly the LFO affects the signal");
-    mixSlider.setTooltip   ("Blend between dry and processed signal");
-    smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");
-
-    waveformAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, lflow::pid::waveform, waveformBox);
-    divisionAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, lflow::pid::division, divisionBox);
-    rhythmAtt   = std::make_unique<APVTS::ComboBoxAttachment> (apvts, lflow::pid::rhythm,   rhythmBox);
-    modeAtt     = std::make_unique<APVTS::ComboBoxAttachment> (apvts, lflow::pid::mode,     modeBox);
-    syncAtt     = std::make_unique<APVTS::ButtonAttachment>   (apvts, lflow::pid::sync,     syncButton);
-    bypassAtt   = std::make_unique<APVTS::ButtonAttachment>   (apvts, lflow::pid::bypass,   bypassButton);
-    rateAtt     = std::make_unique<APVTS::SliderAttachment>   (apvts, lflow::pid::rateHz,   rateSlider);
-    depthAtt    = std::make_unique<APVTS::SliderAttachment>   (apvts, lflow::pid::depth,    depthSlider);
-    mixAtt      = std::make_unique<APVTS::SliderAttachment>   (apvts, lflow::pid::mix,      mixSlider);
-    smoothAtt   = std::make_unique<APVTS::SliderAttachment>   (apvts, lflow::pid::smooth,   smoothSlider);
-
-    waveformBox.onChange = [this]
-    { display.setWaveform (static_cast<lflow::Waveform> (waveformBox.getSelectedItemIndex())); };
-    display.setWaveform (static_cast<lflow::Waveform> (juce::jmax (0, waveformBox.getSelectedItemIndex())));
-
-    refreshSyncEnablement();
+    bypassAtt = std::make_unique<APVTS::ButtonAttachment> (apvts, lflow::pid::bypass, bypassButton);
 
     setSize (560, 440);
     startTimerHz (60);
@@ -63,27 +28,9 @@ LFlOwAudioProcessorEditor::~LFlOwAudioProcessorEditor()
     setLookAndFeel (nullptr);
 }
 
-void LFlOwAudioProcessorEditor::styleRotary (juce::Slider& s)
-{
-    s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 18);
-}
-
-void LFlOwAudioProcessorEditor::refreshSyncEnablement()
-{
-    const bool syncOn = processorRef.getAPVTS().getRawParameterValue (lflow::pid::sync)->load() > 0.5f;
-    // Rate (Hz) is used only when Sync is off; Division + Rhythm only when Sync is on.
-    // setEnabled early-outs when the state is unchanged, so calling this each timer tick is cheap.
-    rateSlider.setEnabled (! syncOn);
-    rateLabel.setEnabled  (! syncOn);
-    divisionBox.setEnabled (syncOn);
-    rhythmBox.setEnabled   (syncOn);
-}
-
 void LFlOwAudioProcessorEditor::timerCallback()
 {
-    display.setPosition (processorRef.getLfoPhase(), processorRef.getLfoValue());
-    refreshSyncEnablement();
+    display.setPosition (processorRef.getLanePhase (0), processorRef.getLaneValue (0));
 }
 
 void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
@@ -118,31 +65,7 @@ void LFlOwAudioProcessorEditor::resized()
     auto header = area.removeFromTop (28);
     bypassButton.setBounds (header.removeFromRight (80));
 
-    auto top = area.removeFromTop (28);
-    waveformBox.setBounds (top.removeFromLeft (140));
-    top.removeFromLeft (8);
-    syncButton.setBounds (top.removeFromLeft (70));
-    top.removeFromLeft (8);
-    divisionBox.setBounds (top.removeFromLeft (80));
-    top.removeFromLeft (6);
-    rhythmBox.setBounds (top.removeFromLeft (90));
-    top.removeFromLeft (8);
-    modeBox.setBounds (top.removeFromLeft (100));
-
-    area.removeFromTop (10);
-    display.setBounds (area.removeFromTop (170));
-
     area.removeFromTop (10);
     area.removeFromBottom (18); // footer
-    auto knobs = area;
-    const int kw = knobs.getWidth() / 4;
-    auto place = [&] (juce::Slider& s, juce::Label& l, juce::Rectangle<int> r)
-    {
-        l.setBounds (r.removeFromTop (16));
-        s.setBounds (r.reduced (6));
-    };
-    place (rateSlider,   rateLabel,   knobs.removeFromLeft (kw));
-    place (depthSlider,  depthLabel,  knobs.removeFromLeft (kw));
-    place (mixSlider,    mixLabel,    knobs.removeFromLeft (kw));
-    place (smoothSlider, smoothLabel, knobs);
+    display.setBounds (area);
 }

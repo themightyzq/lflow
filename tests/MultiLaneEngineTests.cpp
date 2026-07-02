@@ -135,6 +135,39 @@ TEST_CASE ("mix=0 is pure dry passthrough with an active lane", "[multilane]")
     for (float v : ch) REQUIRE_THAT (v, WithinAbs (0.7, 1e-6));
 }
 
+TEST_CASE ("lane phase/value getters are coherent after a block", "[multilane]")
+{
+    MultiLaneEngine e; e.prepare (1000.0, 512); e.reset();
+    LaneParams p;
+    p.waveform = Waveform::Sine;
+    p.sync = false;
+    p.rateHz = 1.0;
+    p.depth = 1.0f;
+    p.dest = Dest::Volume;
+    p.phaseOffset = 0.25f;
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    constexpr int N = 250;
+    std::vector<float> ch (static_cast<size_t> (N), 1.0f);
+    float* chans[1] = { ch.data() };
+    e.process (chans, 1, N);
+
+    const double raw = 249.0 / 1000.0 + 0.25;
+    const float expectedPhase = static_cast<float> (raw - std::floor (raw));
+
+    REQUIRE_THAT (e.getLanePhase (0), WithinAbs (expectedPhase, 1e-6));
+
+    LfoCore reference;
+    reference.setWaveform (Waveform::Sine);
+    const float expectedValue = reference.valueAt (e.getLanePhase (0));
+
+    REQUIRE_THAT (e.getLaneValue (0), WithinAbs (expectedValue, 1e-4));
+}
+
 TEST_CASE ("sample & hold in a pan lane steps independently per channel", "[multilane]")
 {
     MultiLaneEngine e; e.prepare (1000.0, 1024); e.reset();

@@ -4,6 +4,8 @@
 #include "gui/LFlOwLookAndFeel.h"
 #include "gui/LfoDisplay.h"
 
+// Minimal placeholder editor for Phase 2 Task 2 — keeps the plugin compiling and showing
+// something after the lane-indexed parameter break. Task 3 rebuilds the full lane-strip UI.
 class LFlOwAudioProcessorEditor : public juce::AudioProcessorEditor,
                                   private juce::Timer
 {
@@ -23,22 +25,8 @@ private:
 
     LfoDisplay display;
 
-    juce::ComboBox waveformBox, divisionBox, rhythmBox, modeBox;
-    juce::ToggleButton syncButton { "Sync" };
     juce::TextButton bypassButton { "Bypass" };
-    juce::Slider rateSlider, depthSlider, mixSlider, smoothSlider;
-
-    std::unique_ptr<APVTS::ComboBoxAttachment>  waveformAtt, divisionAtt, rhythmAtt, modeAtt;
-    std::unique_ptr<APVTS::ButtonAttachment>    syncAtt, bypassAtt;
-    std::unique_ptr<APVTS::SliderAttachment>    rateAtt, depthAtt, mixAtt, smoothAtt;
-
-    juce::Label rateLabel { {}, "Rate" }, depthLabel { {}, "Depth" },
-                mixLabel  { {}, "Mix" },  smoothLabel { {}, "Smooth" };
-
-    void styleRotary (juce::Slider&);
-    // Enable only the rate controls that apply to the current Sync state:
-    // Rate (Hz) when Sync is off; Division + Rhythm when Sync is on.
-    void refreshSyncEnablement();
+    std::unique_ptr<APVTS::ButtonAttachment> bypassAtt;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFlOwAudioProcessorEditor)
 };

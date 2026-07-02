@@ -3,6 +3,60 @@
 
 namespace lflow {
 
+namespace {
+
+using namespace juce;
+
+// Choice lists shared across all 3 lanes (Phase 1 order).
+const StringArray waveformChoices { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" };
+const StringArray divisionChoices { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" };
+const StringArray rhythmChoices   { "Straight", "Dotted", "Triplet" };
+const StringArray destChoices     { "Volume", "Pan" };
+
+// Adds the 8 lane-indexed parameters for one lane. destDefault/depthDefault vary per lane
+// per the Phase 2 defaults (lane1 Volume @ 50%; lane2 Pan @ 0%; lane3 Volume @ 0%).
+void addLaneParams (AudioProcessorValueTreeState::ParameterLayout& layout,
+                     const char* waveformId, const char* syncId, const char* rateHzId,
+                     const char* divisionId, const char* rhythmId, const char* phaseId,
+                     const char* depthId, const char* destId,
+                     const String& namePrefix, float depthDefault, int destDefault)
+{
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { waveformId, 2 }, namePrefix + " Waveform", waveformChoices, 0));
+
+    layout.add (std::make_unique<AudioParameterBool> (
+        ParameterID { syncId, 2 }, namePrefix + " Sync", false));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { rateHzId, 2 }, namePrefix + " Rate",
+        NormalisableRange<float> (0.01f, 30.0f, 0.01f, 0.3f), 1.0f,
+        AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " Hz"; })));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { divisionId, 2 }, namePrefix + " Division", divisionChoices, 2));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { rhythmId, 2 }, namePrefix + " Rhythm", rhythmChoices, 0));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { phaseId, 2 }, namePrefix + " Phase",
+        NormalisableRange<float> (0.0f, 360.0f, 1.0f), 0.0f,
+        AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " deg"; })));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { depthId, 2 }, namePrefix + " Depth",
+        NormalisableRange<float> (0.0f, 1.0f, 0.01f), depthDefault,
+        AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { destId, 2 }, namePrefix + " Dest", destChoices, destDefault));
+}
+
+} // namespace
+
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
     using namespace juce;
@@ -10,47 +64,31 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     // Bypass — exposed to the host via getBypassParameter() in the processor.
     layout.add (std::make_unique<AudioParameterBool> (
-        ParameterID { pid::bypass, 1 }, "Bypass", false));
-
-    layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { pid::waveform, 1 }, "Waveform",
-        StringArray { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" }, 0));
+        ParameterID { pid::bypass, 2 }, "Bypass", false));
 
     layout.add (std::make_unique<AudioParameterBool> (
-        ParameterID { pid::sync, 1 }, "Sync", false));
+        ParameterID { pid::link, 2 }, "Link", true));
+
+    addLaneParams (layout,
+        pid::l1Waveform, pid::l1Sync, pid::l1RateHz, pid::l1Division, pid::l1Rhythm,
+        pid::l1Phase, pid::l1Depth, pid::l1Dest, "Lane 1", 0.5f, 0 /* Volume */);
+
+    addLaneParams (layout,
+        pid::l2Waveform, pid::l2Sync, pid::l2RateHz, pid::l2Division, pid::l2Rhythm,
+        pid::l2Phase, pid::l2Depth, pid::l2Dest, "Lane 2", 0.0f, 1 /* Pan */);
+
+    addLaneParams (layout,
+        pid::l3Waveform, pid::l3Sync, pid::l3RateHz, pid::l3Division, pid::l3Rhythm,
+        pid::l3Phase, pid::l3Depth, pid::l3Dest, "Lane 3", 0.0f, 0 /* Volume */);
 
     layout.add (std::make_unique<AudioParameterFloat> (
-        ParameterID { pid::rateHz, 1 }, "Rate",
-        NormalisableRange<float> (0.01f, 30.0f, 0.01f, 0.3f), 1.0f,
-        AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " Hz"; })));
-
-    layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { pid::division, 1 }, "Division",
-        StringArray { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 2));
-
-    layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { pid::rhythm, 1 }, "Rhythm",
-        StringArray { "Straight", "Dotted", "Triplet" }, 0));
-
-    layout.add (std::make_unique<AudioParameterFloat> (
-        ParameterID { pid::depth, 1 }, "Depth",
-        NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f,
-        AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
-
-    layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { pid::mode, 1 }, "Mode",
-        StringArray { "Tremolo", "Pan" }, 0));
-
-    layout.add (std::make_unique<AudioParameterFloat> (
-        ParameterID { pid::mix, 1 }, "Mix",
+        ParameterID { pid::mix, 2 }, "Mix",
         NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f,
         AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
 
     layout.add (std::make_unique<AudioParameterFloat> (
-        ParameterID { pid::smooth, 1 }, "Smooth",
+        ParameterID { pid::smooth, 2 }, "Smooth",
         NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.15f,
         AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));

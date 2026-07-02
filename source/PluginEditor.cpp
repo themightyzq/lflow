@@ -24,17 +24,6 @@ constexpr LaneIds laneIds[3] = {
     { lflow::pid::l3Waveform, lflow::pid::l3Sync, lflow::pid::l3RateHz, lflow::pid::l3Division,
       lflow::pid::l3Rhythm, lflow::pid::l3Phase, lflow::pid::l3Depth, lflow::pid::l3Dest },
 };
-
-constexpr juce::uint32 laneColour (int lane)
-{
-    using C = LFlOwLookAndFeel::Colors;
-    switch (lane)
-    {
-        case 0:  return C::lane0;
-        case 1:  return C::lane1;
-        default: return C::lane2;
-    }
-}
 } // namespace
 
 // ---------------------------------------------------------------------- LaneChip
@@ -77,13 +66,19 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
 
     styleRotary (mixSlider, 46, 16);
     styleRotary (smoothSlider, 46, 16);
+    styleRotary (xoverLowSlider, 46, 16);
+    styleRotary (xoverHighSlider, 46, 16);
     mixSlider.setTooltip ("Blend between dry and processed signal");
     smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");
-    for (auto* s : { &mixSlider, &smoothSlider }) addAndMakeVisible (s);
-    for (auto* l : { &mixLabel, &smoothLabel })
+    xoverLowSlider.setTooltip ("Crossover between the Low and Mid bands");
+    xoverHighSlider.setTooltip ("Crossover between the Mid and High bands");
+    for (auto* s : { &mixSlider, &smoothSlider, &xoverLowSlider, &xoverHighSlider }) addAndMakeVisible (s);
+    for (auto* l : { &mixLabel, &smoothLabel, &xoverLowLabel, &xoverHighLabel })
     { l->setJustificationType (juce::Justification::centred); addAndMakeVisible (l); }
-    mixAtt    = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::mix,    mixSlider);
-    smoothAtt = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::smooth, smoothSlider);
+    mixAtt       = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::mix,       mixSlider);
+    smoothAtt    = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::smooth,    smoothSlider);
+    xoverLowAtt  = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::xoverLow,  xoverLowSlider);
+    xoverHighAtt = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::xoverHigh, xoverHighSlider);
 
     bypassButton.setClickingTogglesState (true);
     bypassButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LFlOwLookAndFeel::Colors::primary));
@@ -119,7 +114,7 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.phaseId = ids.phase;
     s.depthId = ids.depth;
 
-    const auto colour = laneColour (i);
+    const auto colour = LFlOwLookAndFeel::laneColour (i);
     s.chip.setup (colour, i + 1);
     addAndMakeVisible (s.chip);
 
@@ -132,7 +127,7 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.waveformBox.addItemList ({ "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" }, 1);
     s.divisionBox.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 1);
     s.rhythmBox.addItemList   ({ "Straight", "Dotted", "Triplet" }, 1);
-    s.destBox.addItemList     ({ "Volume", "Pan" }, 1);
+    s.destBox.addItemList     ({ "Volume", "Pan", "Low", "Mid", "High" }, 1);
     for (auto* b : { &s.waveformBox, &s.divisionBox, &s.rhythmBox, &s.destBox })
         addAndMakeVisible (b);
 
@@ -153,7 +148,7 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.divisionBox.setTooltip (laneName + ": note value per LFO cycle when Sync is on");
     s.rhythmBox.setTooltip   (laneName + ": straight, dotted, or triplet feel for the synced rate");
     s.phaseSlider.setTooltip (laneName + ": phase offset in degrees, relative to the other lanes");
-    s.destBox.setTooltip     (laneName + ": what this lane modulates, Volume or Pan");
+    s.destBox.setTooltip     (laneName + ": what this lane modulates, Volume, Pan, or a frequency band");
     s.depthSlider.setTooltip (laneName + ": how strongly this lane affects the signal");
 
     s.waveformAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids.waveform, s.waveformBox);
@@ -273,18 +268,28 @@ void LFlOwAudioProcessorEditor::resized()
     area.removeFromTop (10);
     auto globalRow = area; // remaining space for the global controls row
 
-    auto linkArea = globalRow.removeFromLeft (72);
-    linkButton.setBounds (linkArea.withSizeKeepingCentre (66, 26));
+    auto linkArea = globalRow.removeFromLeft (64);
+    linkButton.setBounds (linkArea.withSizeKeepingCentre (60, 26));
 
-    globalRow.removeFromLeft (12);
-    auto mixArea = globalRow.removeFromLeft (70);
+    globalRow.removeFromLeft (8);
+    auto mixArea = globalRow.removeFromLeft (64);
     mixLabel.setBounds (mixArea.removeFromTop (16));
     mixSlider.setBounds (mixArea);
 
-    globalRow.removeFromLeft (12);
-    auto smoothArea = globalRow.removeFromLeft (70);
+    globalRow.removeFromLeft (8);
+    auto smoothArea = globalRow.removeFromLeft (64);
     smoothLabel.setBounds (smoothArea.removeFromTop (16));
     smoothSlider.setBounds (smoothArea);
+
+    globalRow.removeFromLeft (8);
+    auto xoverLowArea = globalRow.removeFromLeft (64);
+    xoverLowLabel.setBounds (xoverLowArea.removeFromTop (16));
+    xoverLowSlider.setBounds (xoverLowArea);
+
+    globalRow.removeFromLeft (8);
+    auto xoverHighArea = globalRow.removeFromLeft (64);
+    xoverHighLabel.setBounds (xoverHighArea.removeFromTop (16));
+    xoverHighSlider.setBounds (xoverHighArea);
 }
 
 void LFlOwAudioProcessorEditor::layoutLaneStrip (int i, juce::Rectangle<int> area)

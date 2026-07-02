@@ -3,6 +3,8 @@
 namespace lflow::pid {
 inline constexpr const char* bypass = "bypass";
 inline constexpr const char* link   = "link";
+inline constexpr const char* xoverLow  = "xoverLow";
+inline constexpr const char* xoverHigh = "xoverHigh";
 inline constexpr const char* mix    = "mix";
 inline constexpr const char* smooth = "smooth";
 

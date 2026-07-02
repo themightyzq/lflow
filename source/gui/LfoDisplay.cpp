@@ -1,20 +1,6 @@
 #include "LfoDisplay.h"
 #include "LFlOwLookAndFeel.h"
 
-namespace
-{
-constexpr juce::uint32 laneColour (int lane)
-{
-    using C = LFlOwLookAndFeel::Colors;
-    switch (lane)
-    {
-        case 0:  return C::lane0;
-        case 1:  return C::lane1;
-        default: return C::lane2;
-    }
-}
-} // namespace
-
 void LfoDisplay::setLane (int lane, lflow::Waveform waveform, float phaseOffset01, bool active)
 {
     if (lane < 0 || lane >= kNumLanes)
@@ -85,7 +71,7 @@ void LfoDisplay::paint (juce::Graphics& g)
         auto& lane = lanes[(size_t) i];
         rebuildPathIfNeeded (lane);
 
-        const auto colour = juce::Colour (laneColour (i));
+        const auto colour = juce::Colour (LFlOwLookAndFeel::laneColour (i));
         g.setColour (lane.active ? colour : colour.withAlpha (0.35f));
         g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
 

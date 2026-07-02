@@ -38,4 +38,17 @@ public:
         setColour (juce::TooltipWindow::backgroundColourId,   juce::Colour (Colors::surface));
         setColour (juce::TooltipWindow::textColourId,         juce::Colour (Colors::onSurface));
     }
+
+    // Lane accent colour by index (0/1/2), shared by the editor's LaneChip/labels and the
+    // LfoDisplay overlay so both stay in lockstep with a single source of truth.
+    static constexpr juce::uint32 laneColour (int laneIndex)
+    {
+        using C = Colors;
+        switch (laneIndex)
+        {
+            case 0:  return C::lane0;
+            case 1:  return C::lane1;
+            default: return C::lane2;
+        }
+    }
 };

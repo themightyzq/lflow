@@ -72,10 +72,11 @@ private:
     LaneStrip laneStrips[3];
 
     juce::ToggleButton linkButton { "Link" };
-    juce::Slider mixSlider, smoothSlider;
+    juce::Slider mixSlider, smoothSlider, xoverLowSlider, xoverHighSlider;
     juce::Label mixLabel { {}, "Mix" }, smoothLabel { {}, "Smooth" };
+    juce::Label xoverLowLabel { {}, "Xover Lo" }, xoverHighLabel { {}, "Xover Hi" };
     std::unique_ptr<APVTS::ButtonAttachment> linkAtt;
-    std::unique_ptr<APVTS::SliderAttachment> mixAtt, smoothAtt;
+    std::unique_ptr<APVTS::SliderAttachment> mixAtt, smoothAtt, xoverLowAtt, xoverHighAtt;
 
     juce::TextButton bypassButton { "Bypass" };
     std::unique_ptr<APVTS::ButtonAttachment> bypassAtt;

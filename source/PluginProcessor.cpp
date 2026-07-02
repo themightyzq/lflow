@@ -92,6 +92,10 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     g.smooth = apvts.getRawParameterValue (lflow::pid::smooth)->load();
     engine.setGlobalParams (g);
 
+    const double xoverLow  = (double) apvts.getRawParameterValue (lflow::pid::xoverLow)->load();
+    const double xoverHigh = (double) apvts.getRawParameterValue (lflow::pid::xoverHigh)->load();
+    engine.setCrossovers (xoverLow, xoverHigh);
+
     // Transport.
     bool playing = false; double bpm = 120.0, ppq = 0.0;
     if (auto* ph = getPlayHead())

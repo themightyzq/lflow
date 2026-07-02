@@ -11,7 +11,7 @@ using namespace juce;
 const StringArray waveformChoices { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" };
 const StringArray divisionChoices { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" };
 const StringArray rhythmChoices   { "Straight", "Dotted", "Triplet" };
-const StringArray destChoices     { "Volume", "Pan" };
+const StringArray destChoices     { "Volume", "Pan", "Low", "Mid", "High" };
 
 // Adds the 8 lane-indexed parameters for one lane. destDefault/depthDefault vary per lane
 // per the Phase 2 defaults (lane1 Volume @ 50%; lane2 Pan @ 0%; lane3 Volume @ 0%).
@@ -68,6 +68,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     layout.add (std::make_unique<AudioParameterBool> (
         ParameterID { pid::link, 2 }, "Link", true));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::xoverLow, 2 }, "Xover Lo",
+        NormalisableRange<float> (40.0f, 2000.0f, 1.0f, 0.35f), 250.0f,
+        AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " Hz"; })));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { pid::xoverHigh, 2 }, "Xover Hi",
+        NormalisableRange<float> (500.0f, 12000.0f, 1.0f, 0.35f), 2500.0f,
+        AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " Hz"; })));
 
     addLaneParams (layout,
         pid::l1Waveform, pid::l1Sync, pid::l1RateHz, pid::l1Division, pid::l1Rhythm,

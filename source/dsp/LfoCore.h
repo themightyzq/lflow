@@ -19,7 +19,6 @@ public:
     {
         rngState = (seed != 0u) ? seed : 0x1234567u;
         lastPhase = 2.0f;          // force a fresh step on first S&H eval
-        currentStep = nextRandom();
     }
 
     float valueAt (float phase) noexcept

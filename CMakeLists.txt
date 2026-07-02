@@ -18,7 +18,7 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 # ---- Shared pure-C++ DSP library (no JUCE) ----
-add_library(lflow_dsp STATIC source/dsp/ChopperEngine.cpp)
+add_library(lflow_dsp STATIC source/dsp/MultiLaneEngine.cpp)
 target_include_directories(lflow_dsp PUBLIC source/dsp)
 target_compile_features(lflow_dsp PUBLIC cxx_std_17)
 
@@ -87,7 +87,8 @@ add_executable(lflow_tests
     tests/LfoCoreTests.cpp
     tests/SyncRateTests.cpp
     tests/LfoClockTests.cpp
-    tests/ChopperEngineTests.cpp)
+    tests/LaneParamsTests.cpp
+    tests/MultiLaneEngineTests.cpp)
 target_include_directories(lflow_tests PRIVATE source/dsp)
 target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain)
 target_compile_features(lflow_tests PRIVATE cxx_std_17)

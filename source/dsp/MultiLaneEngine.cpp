@@ -92,6 +92,13 @@ void MultiLaneEngine::setGlobalParams (const GlobalParams& g) noexcept
     globalParams = g;
 }
 
+void MultiLaneEngine::setCustomTable (int lane, const float* data, int size) noexcept
+{
+    if (lane < 0 || lane >= kNumLanes) return;
+    lanes[lane].lfo.setCustomTable (data, size);
+    lanes[lane].lfoR.setCustomTable (data, size);
+}
+
 float MultiLaneEngine::getLanePhase (int lane) const noexcept
 {
     if (lane < 0 || lane >= kNumLanes) return 0.0f;

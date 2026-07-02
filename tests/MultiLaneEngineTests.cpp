@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "MultiLaneEngine.h"
+#include "ShapeModel.h"
 #include <vector>
 #include <cmath>
 
@@ -418,4 +419,133 @@ TEST_CASE ("Link lockstep fix: a lane reactivated after sitting at depth 0 resum
 
     for (int nIdx = 500; nIdx < 1000; ++nIdx)
         REQUIRE_THAT (buf[static_cast<size_t> (nIdx)], WithinAbs (refBuf[static_cast<size_t> (nIdx)], 1e-5));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 Task 1: Custom waveform (shape DSP) + folded Phase 3 stereo band-split test.
+// ---------------------------------------------------------------------------
+
+TEST_CASE ("stereo band-split: a Low-dest lane gates both channels identically (mono-gain band)",
+           "[multilane][band][stereo]")
+{
+    const double sr = 48000.0;
+    const int n = static_cast<int> (sr);
+
+    LaneParams lowLane;
+    lowLane.waveform = Waveform::Square;
+    lowLane.sync = false;
+    lowLane.rateHz = 5.0;
+    lowLane.depth = 1.0f;
+    lowLane.dest = Dest::Low;
+    lowLane.phaseOffset = 0.0f;
+
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+
+    MultiLaneEngine e; e.prepare (sr, 4096); e.reset();
+    e.setLaneParams (0, lowLane);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    e.setGlobalParams (g);
+
+    auto sine = makeSine (100.0, sr, n);
+    std::vector<float> l = sine, r = sine; // identical stereo content in
+    float* chans[2] = { l.data(), r.data() };
+    e.process (chans, 2, n);
+
+    // Band gain (bandGain[]) is computed once per sample and applied to each
+    // channel's own crossover chain identically -- it isn't a per-channel (Pan-style)
+    // gain. With identical L/R input and identically-prepared per-channel crossovers,
+    // the two channels must gate in lockstep, sample for sample.
+    for (int i = 0; i < n; ++i)
+        REQUIRE_THAT (l[static_cast<size_t> (i)], WithinAbs (r[static_cast<size_t> (i)], 1e-6));
+}
+
+TEST_CASE ("engine: a Custom lane with a drawn near-square shape gates audio", "[multilane][custom]")
+{
+    // Near-square: high across [0,0.499], a fast transition around x=0.5 (steep
+    // curve exponents bend the short seg toward/away from its endpoint quickly),
+    // low across most of [0.501,1.0], with a sharp rise back to 1 right at the
+    // wrap (x=1 meets x=0, both 1 -> continuous, no click at the loop point).
+    ShapeNode nodes[4] = {
+        { 0.0f,   1.0f,  0.0f },
+        { 0.499f, 1.0f, -1.0f },
+        { 0.501f, 0.0f,  1.0f },
+        { 1.0f,   1.0f,  0.0f }
+    };
+    float table[kShapeTableSize];
+    bakeShapeTable (nodes, 4, table, kShapeTableSize);
+
+    MultiLaneEngine e; e.prepare (1000.0, 512); e.reset();
+    e.setCustomTable (0, table, kShapeTableSize);
+
+    LaneParams p;
+    p.waveform = Waveform::Custom;
+    p.sync = false;
+    p.rateHz = 1.0;
+    p.depth = 1.0f;
+    p.dest = Dest::Volume;
+    p.phaseOffset = 0.0f;
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    std::vector<float> ch (1000, 1.0f);
+    float* chans[1] = { ch.data() };
+    e.process (chans, 1, 1000);
+
+    // 1 Hz @ 1kHz sr: sample 0 -> phase 0 -> shape ~1 -> gain ~0 (gated closed).
+    // sample 700 -> phase 0.7 -> shape ~0 -> gain ~1 (fully open).
+    REQUIRE_THAT (ch[0],   WithinAbs (0.0, 0.02));
+    REQUIRE_THAT (ch[700], WithinAbs (1.0, 0.02));
+}
+
+TEST_CASE ("engine: a follower lane fed lane0's table via setCustomTable reproduces lane0's values",
+           "[multilane][custom]")
+{
+    ShapeNode nodes[3] = { { 0.0f, 0.0f, 0.0f }, { 0.5f, 1.0f, 0.5f }, { 1.0f, 0.0f, 0.0f } };
+    float table[kShapeTableSize];
+    bakeShapeTable (nodes, 3, table, kShapeTableSize);
+
+    LaneParams p;
+    p.waveform = Waveform::Custom;
+    p.sync = false;
+    p.rateHz = 1.0;
+    p.depth = 1.0f;
+    p.dest = Dest::Volume;
+    p.phaseOffset = 0.0f;
+
+    // Reference: lane0 alone, given the table.
+    MultiLaneEngine ref; ref.prepare (1000.0, 512); ref.reset();
+    ref.setCustomTable (0, table, kShapeTableSize);
+    ref.setLaneParams (0, p);
+    ref.setLaneParams (1, LaneParams{});
+    ref.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    ref.setGlobalParams (g);
+
+    std::vector<float> refBuf (1000, 1.0f);
+    float* refChans[1] = { refBuf.data() };
+    ref.process (refChans, 1, 1000);
+
+    // Under test: mirrors how the processor hands a linked follower lane1's table
+    // (here: lane0's) when its resolved waveform is Custom -- both lanes get the
+    // SAME table pointer and identical params.
+    MultiLaneEngine e; e.prepare (1000.0, 512); e.reset();
+    e.setCustomTable (0, table, kShapeTableSize);
+    e.setCustomTable (1, table, kShapeTableSize); // follower fed lane0's table
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, p);
+    e.setLaneParams (2, LaneParams{});
+    e.setGlobalParams (g);
+
+    std::vector<float> buf (1000, 1.0f);
+    float* chans[1] = { buf.data() };
+    e.process (chans, 1, 1000);
+
+    // Per-sample modulator values line up exactly: the follower reproduces lane0's
+    // values, and lane0 itself is unaffected by having a sibling on the same table.
+    REQUIRE_THAT (e.getLaneValue (1), WithinAbs (e.getLaneValue (0), 1e-6));
+    REQUIRE_THAT (e.getLaneValue (0), WithinAbs (ref.getLaneValue (0), 1e-6));
 }

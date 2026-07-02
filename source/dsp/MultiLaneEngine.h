@@ -35,6 +35,13 @@ public:
     void setCrossovers (double lowHz, double highHz) noexcept;
     double getEffectiveHighHz() const noexcept { return xoverHighHz; }
 
+    // Feeds a Custom-waveform lookup table (see ShapeModel.h/TripleBuffer.h) to a
+    // lane's BOTH LfoCores (L/mono and R/pan share the same table pointer -- one
+    // shape per lane, matching the Phase 4 design). data/size are borrowed, not
+    // copied (RT-safe, no allocation); pass nullptr to unset (falls back to Sine
+    // per LfoCore::valueAt). No-op for an out-of-range lane index.
+    void setCustomTable (int lane, const float* data, int size) noexcept;
+
     void process (float* const* channels, int numChannels, int numSamples) noexcept;
 
     // Clock phase (including the lane's phase offset) that pairs with the last smoothed

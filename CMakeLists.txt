@@ -90,9 +90,12 @@ add_executable(lflow_tests
     tests/LaneParamsTests.cpp
     tests/MultiLaneEngineTests.cpp
     tests/BiquadTests.cpp
-    tests/LR4CrossoverTests.cpp)
+    tests/LR4CrossoverTests.cpp
+    tests/ShapeModelTests.cpp
+    tests/TripleBufferTests.cpp)
 target_include_directories(lflow_tests PRIVATE source/dsp)
-target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain)
+find_package(Threads REQUIRED)
+target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain Threads::Threads)
 target_compile_features(lflow_tests PRIVATE cxx_std_17)
 
 include(CTest)

@@ -2,6 +2,7 @@
 #include "LaneParams.h"
 #include "LfoCore.h"
 #include "LfoClock.h"
+#include "LR4Crossover.h"
 
 namespace lflow {
 
@@ -26,6 +27,13 @@ public:
     void setTransport (bool playing, double bpm, double ppqPosition) noexcept;
     void setLaneParams (int lane, const LaneParams& p) noexcept;
     void setGlobalParams (const GlobalParams& g) noexcept;
+
+    // Band-split crossover points for the Low/Mid/High lane destinations. Defaults
+    // 250/2500 Hz. Enforces effectiveHigh = max(highHz, lowHz*1.25) so the bands can't
+    // invert; recomputes filter coefficients only for the split(s) whose value actually
+    // changed (cheap compare-before-set, RT-safe: arithmetic only, no allocation).
+    void setCrossovers (double lowHz, double highHz) noexcept;
+    double getEffectiveHighHz() const noexcept { return xoverHighHz; }
 
     void process (float* const* channels, int numChannels, int numSamples) noexcept;
 
@@ -58,6 +66,16 @@ private:
     bool   hostPlaying { false };
     double hostBpm     { 120.0 };
     double hostPpq     { 0.0 };
+
+    // Band-split state (Phase 3). Hardcoded to 2 channels internally: process()
+    // clamps/ignores channels beyond index 1 for band splitting (mono uses only
+    // index 0's chain), but Volume/Pan lanes still apply to every channel as before.
+    static constexpr int kNumBandChannels = 2;
+    LR4Crossover lowSplit[kNumBandChannels];  // split @ xoverLowHz: (low, rest)
+    LR4Crossover highSplit[kNumBandChannels]; // split @ xoverHighHz on `rest`: (mid, high)
+    double xoverLowHz  { 250.0 };
+    double xoverHighHz { 2500.0 }; // already clamped (effective) value
+    bool   bandWasActive { false };
 };
 
 } // namespace lflow

@@ -9,6 +9,19 @@ void MultiLaneEngine::prepare (double sr, int /*maxBlock*/) noexcept
     sampleRate = (sr > 0.0) ? sr : 44100.0;
     for (auto& lane : lanes)
         lane.clock.prepare (sampleRate);
+
+    // LR4Crossover::prepare() resets to its own internal default frequency, so
+    // (re)apply our current xoverLow/HighHz unconditionally here -- independent of
+    // setCrossovers()'s change-compare, which only guards against redundant
+    // recomputation for identical Hz values already applied.
+    for (int c = 0; c < kNumBandChannels; ++c)
+    {
+        lowSplit[c].prepare (sampleRate);
+        highSplit[c].prepare (sampleRate);
+        lowSplit[c].setFrequency (xoverLowHz);
+        highSplit[c].setFrequency (xoverHighHz);
+    }
+
     reset();
 }
 
@@ -29,6 +42,36 @@ void MultiLaneEngine::reset() noexcept
         lane.lastPhase = 0.0f;
         lane.lastValue = 0.0f;
     }
+
+    for (int c = 0; c < kNumBandChannels; ++c)
+    {
+        lowSplit[c].reset();
+        highSplit[c].reset();
+    }
+    bandWasActive = false;
+}
+
+void MultiLaneEngine::setCrossovers (double lowHz, double highHz) noexcept
+{
+    const double newLow  = lowHz;
+    const double newHigh = (highHz > lowHz * 1.25) ? highHz : lowHz * 1.25;
+
+    const bool lowChanged  = (newLow  != xoverLowHz);
+    const bool highChanged = (newHigh != xoverHighHz);
+
+    if (! lowChanged && ! highChanged)
+        return; // cheap compare-before-set: no coefficient recompute needed
+
+    xoverLowHz  = newLow;
+    xoverHighHz = newHigh;
+
+    if (lowChanged)
+        for (int c = 0; c < kNumBandChannels; ++c)
+            lowSplit[c].setFrequency (xoverLowHz);
+
+    if (highChanged)
+        for (int c = 0; c < kNumBandChannels; ++c)
+            highSplit[c].setFrequency (xoverHighHz);
 }
 
 void MultiLaneEngine::setTransport (bool playing, double bpm, double ppq) noexcept
@@ -79,13 +122,29 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
     bool   doPan[kNumLanes];
     double rates[kNumLanes];
     bool   anyActive = false;
+    bool   bandActive = false;
 
     for (int i = 0; i < kNumLanes; ++i)
     {
         Lane& lane = lanes[i];
         active[i] = lane.params.depth > 0.0f;
-        rates[i] = 0.0;
-        doPan[i] = false;
+        doPan[i]  = false;
+
+        // Link lockstep fix (folded from Phase 2 final review): every lane's clock
+        // rate and sync-phase-reset are computed/applied regardless of depth, so a
+        // lane sitting at depth 0 for a while and later reactivated resumes at the
+        // phase it WOULD have had (Link-linked lanes stay in lockstep during
+        // free-run; unlinked lanes correctly reflect elapsed time). Only waveform
+        // evaluation, smoothing, and gain application (below) are still gated on
+        // depth>0 -- the depth-0 bit-transparency guarantee holds because clock
+        // advance never touches the audio buffer. Note: a SampleHold lane's own
+        // wrap-detection state was frozen while inactive, so it may fire one
+        // spurious "roll" right at reactivation -- acceptable, cosmetic.
+        rates[i] = lane.params.sync ? LfoClock::syncedHz (hostBpm, lane.params.cycleBeats)
+                                     : lane.params.rateHz;
+        if (lane.params.sync && hostPlaying)
+            lane.clock.setPhaseFromPpq (hostPpq, lane.params.cycleBeats);
+
         if (! active[i])
             continue;
 
@@ -94,25 +153,41 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
         lane.lfo.setWaveform (lane.params.waveform);
         lane.lfoR.setWaveform (lane.params.waveform);
 
-        rates[i] = lane.params.sync ? LfoClock::syncedHz (hostBpm, lane.params.cycleBeats)
-                                     : lane.params.rateHz;
-        if (lane.params.sync && hostPlaying)
-            lane.clock.setPhaseFromPpq (hostPpq, lane.params.cycleBeats);
-
         doPan[i] = (lane.params.dest == Dest::Pan) && numChannels >= 2;
+
+        if (lane.params.dest == Dest::Low || lane.params.dest == Dest::Mid || lane.params.dest == Dest::High)
+            bandActive = true;
     }
 
-    // Depth-0 lanes are exact no-ops. If every lane is inactive, skip the buffer
-    // entirely so it stays bit-identical no matter what mix/smooth are set to.
+    // Engaged -> disengaged transition: clear crossover filter memory. A one-time
+    // transient from this reset is acceptable/inaudible at gain parity (see the
+    // Phase 3 design doc) -- far cheaper than keeping the split running dry.
+    if (bandWasActive && ! bandActive)
+        for (int c = 0; c < kNumBandChannels; ++c)
+        {
+            lowSplit[c].reset();
+            highSplit[c].reset();
+        }
+    bandWasActive = bandActive;
+
+    // Depth-0-everywhere: the buffer is an exact no-op (bit-identical regardless of
+    // mix/smooth), but lane clocks still advance below per the lockstep fix above.
     if (! anyActive)
+    {
+        for (int n = 0; n < numSamples; ++n)
+            for (int i = 0; i < kNumLanes; ++i)
+                lanes[i].clock.advance (rates[i]);
         return;
+    }
 
     const float mix = globalParams.mix;
+    const int chLimit = (numChannels < kNumBandChannels) ? numChannels : kNumBandChannels;
 
     for (int n = 0; n < numSamples; ++n)
     {
         float gainL = 1.0f;
         float gainR = 1.0f;
+        float bandGain[3] = { 1.0f, 1.0f, 1.0f }; // Low, Mid, High (mono, applied to both channels)
 
         for (int i = 0; i < kNumLanes; ++i)
         {
@@ -125,22 +200,55 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
             const float modL = onePole (lane.lfo.valueAt (ph), lane.smoothL);
             const float depth = lane.params.depth;
             const float gL = 1.0f - depth * modL;
-            gainL *= gL;
 
-            if (doPan[i])
+            switch (lane.params.dest)
             {
-                float phR = ph + 0.5f;
-                phR -= std::floor (phR);
-                const float modR = onePole (lane.lfoR.valueAt (phR), lane.smoothR);
-                gainR *= (1.0f - depth * modR);
-            }
-            else
-            {
-                gainR *= gL;
+                case Dest::Pan:
+                    gainL *= gL;
+                    if (doPan[i])
+                    {
+                        float phR = ph + 0.5f;
+                        phR -= std::floor (phR);
+                        const float modR = onePole (lane.lfoR.valueAt (phR), lane.smoothR);
+                        gainR *= (1.0f - depth * modR);
+                    }
+                    else
+                    {
+                        gainR *= gL;
+                    }
+                    break;
+
+                case Dest::Low:  bandGain[0] *= gL; break;
+                case Dest::Mid:  bandGain[1] *= gL; break;
+                case Dest::High: bandGain[2] *= gL; break;
+
+                case Dest::Volume:
+                default:
+                    gainL *= gL;
+                    gainR *= gL;
+                    break;
             }
 
             lane.lastPhase = ph;
             lane.lastValue = modL;
+        }
+
+        // Band split -> per-band gain -> sum. Only runs when >=1 lane targets a band
+        // with depth>0 (bandActive); otherwise the full-band path below is untouched,
+        // keeping it byte-identical to Phase 2. numChannels==1 (mono) uses only
+        // chain index 0; channels beyond index 1 are ignored for splitting (Volume/
+        // Pan lanes still apply to them via the loop below, same as Phase 2).
+        float bandSummed[kNumBandChannels] = { 0.0f, 0.0f };
+        if (bandActive)
+        {
+            for (int c = 0; c < chLimit; ++c)
+            {
+                const float in = channels[c][n];
+                float low = 0.0f, rest = 0.0f, mid = 0.0f, high = 0.0f;
+                lowSplit[c].split (in, low, rest);
+                highSplit[c].split (rest, mid, high);
+                bandSummed[c] = low * bandGain[0] + mid * bandGain[1] + high * bandGain[2];
+            }
         }
 
         for (int c = 0; c < numChannels; ++c)
@@ -148,12 +256,12 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
             float* d = channels[c];
             const float dry = d[n];
             const float g = (c == 1) ? gainR : gainL;
-            d[n] = dry * (1.0f - mix) + (dry * g) * mix;
+            const float wetSource = (bandActive && c < kNumBandChannels) ? bandSummed[c] : dry;
+            d[n] = dry * (1.0f - mix) + (wetSource * g) * mix;
         }
 
         for (int i = 0; i < kNumLanes; ++i)
-            if (active[i])
-                lanes[i].clock.advance (rates[i]);
+            lanes[i].clock.advance (rates[i]);
     }
 }
 

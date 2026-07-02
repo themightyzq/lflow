@@ -3,7 +3,10 @@
 
 namespace lflow {
 
-enum class Dest { Volume = 0, Pan };
+// Volume/Pan keep indices 0/1 for Phase 1/2 session compat; Low/Mid/High are an
+// append for Phase 3 band-level lane destinations (see docs/superpowers/specs/
+// 2026-07-02-lflow-phase3-multiband-design.md).
+enum class Dest { Volume = 0, Pan, Low, Mid, High };
 
 // Per-lane parameters for MultiLaneEngine. Pure data, no JUCE.
 struct LaneParams

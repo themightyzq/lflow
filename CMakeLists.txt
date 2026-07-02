@@ -93,7 +93,8 @@ add_executable(lflow_tests
     tests/BiquadTests.cpp
     tests/LR4CrossoverTests.cpp
     tests/ShapeModelTests.cpp
-    tests/TripleBufferTests.cpp)
+    tests/TripleBufferTests.cpp
+    tests/ModDelayTests.cpp)
 target_include_directories(lflow_tests PRIVATE source/dsp)
 find_package(Threads REQUIRED)
 target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain Threads::Threads)

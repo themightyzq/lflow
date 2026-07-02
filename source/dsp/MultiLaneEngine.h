@@ -3,6 +3,7 @@
 #include "LfoCore.h"
 #include "LfoClock.h"
 #include "LR4Crossover.h"
+#include "ModDelay.h"
 
 namespace lflow {
 
@@ -20,6 +21,12 @@ class MultiLaneEngine
 {
 public:
     static constexpr int kNumLanes = 3;
+
+    // Phase 5 Pitch-dest (vibrato) constants -- exposed so tests can reference the
+    // exact same values the engine uses (no magic-number drift between .cpp and
+    // tests). See docs/superpowers/specs/2026-07-02-lflow-phase5-pitch-vibrato-design.md.
+    static constexpr double kCenterMs   = 12.0; // center delay at mod == 0.5 (rest position)
+    static constexpr double kMaxSwingMs = 10.0; // +/- swing at full combined depth, post-clamp
 
     void prepare (double sampleRate, int maxBlock) noexcept;
     void reset() noexcept;
@@ -83,6 +90,15 @@ private:
     double xoverLowHz  { 250.0 };
     double xoverHighHz { 2500.0 }; // already clamped (effective) value
     bool   bandWasActive { false };
+
+    // Pitch destination (Phase 5): per-channel modulated delay for LFO vibrato. Runs
+    // strictly AFTER the band split/sum above and BEFORE the Volume/Pan lane gains
+    // (see process()'s per-channel loop). Only channels 0/1 get a delay line -- same
+    // 2-channel limitation as the band split above. Capacity allocated once in
+    // prepare(); process()/reset() are RT-safe (see ModDelay.h's allocation notice).
+    static constexpr double kPitchDelayCapacitySeconds = 0.064; // 64 ms, per design doc
+    ModDelay pitchDelay[kNumBandChannels];
+    bool     pitchWasActive { false };
 };
 
 } // namespace lflow

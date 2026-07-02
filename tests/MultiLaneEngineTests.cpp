@@ -1,12 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "MultiLaneEngine.h"
+#include "ModDelay.h"
 #include "ShapeModel.h"
 #include <vector>
 #include <cmath>
 
 using namespace lflow;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 
 // Dest enum: Volume/Pan MUST keep indices 0/1 (Phase 1/2 session compat); Low/Mid/High
 // are an append for Phase 3 band-level destinations.
@@ -15,6 +17,7 @@ static_assert (static_cast<int> (Dest::Pan)    == 1, "Dest::Pan must stay index 
 static_assert (static_cast<int> (Dest::Low)    == 2, "Dest::Low appended after Pan");
 static_assert (static_cast<int> (Dest::Mid)    == 3, "Dest::Mid appended after Low");
 static_assert (static_cast<int> (Dest::High)   == 4, "Dest::High appended after Mid");
+static_assert (static_cast<int> (Dest::Pitch)  == 5, "Dest::Pitch appended after High (Phase 5)");
 
 namespace {
 
@@ -28,6 +31,44 @@ std::vector<float> makeSine (double freqHz, double sampleRate, int numSamples)
         out[static_cast<size_t> (i)] =
             static_cast<float> (std::sin (2.0 * kPi * freqHz * static_cast<double> (i) / sampleRate));
     return out;
+}
+
+// Like makeSine, but with an explicit starting phase (radians) -- used to build
+// decorrelated L/R stereo test content (Phase 4/5 folded hardening item).
+std::vector<float> makeSinePhase (double freqHz, double sampleRate, int numSamples, double phaseRad)
+{
+    std::vector<float> out (static_cast<size_t> (numSamples));
+    for (int i = 0; i < numSamples; ++i)
+        out[static_cast<size_t> (i)] =
+            static_cast<float> (std::sin (2.0 * kPi * freqHz * static_cast<double> (i) / sampleRate + phaseRad));
+    return out;
+}
+
+// Rising zero-crossing frequency estimate over samples[startIdx, endIdx), using linear
+// interpolation between samples for sub-sample crossing times, then dividing the total
+// span between the first and last crossing by the number of periods it spans. Averaging
+// over every crossing in the window (rather than a single period) suppresses per-crossing
+// quantization noise, which matters here since we're measuring a moving-target
+// instantaneous frequency over a short (20 ms) window.
+double zeroCrossingFreq (const std::vector<float>& buf, int startIdx, int endIdx, double sampleRate)
+{
+    std::vector<double> crossTimes;
+    for (int i = startIdx + 1; i < endIdx && i < static_cast<int> (buf.size()); ++i)
+    {
+        const float prev = buf[static_cast<size_t> (i - 1)];
+        const float curr = buf[static_cast<size_t> (i)];
+        if (prev < 0.0f && curr >= 0.0f)
+        {
+            const double frac = static_cast<double> (-prev) / static_cast<double> (curr - prev);
+            const double samplePos = static_cast<double> (i - 1) + frac;
+            crossTimes.push_back (samplePos / sampleRate);
+        }
+    }
+    if (crossTimes.size() < 2)
+        return 0.0;
+    const double span = crossTimes.back() - crossTimes.front();
+    const int numPeriods = static_cast<int> (crossTimes.size()) - 1;
+    return static_cast<double> (numPeriods) / span;
 }
 
 double rmsRange (const std::vector<float>& v, size_t start, size_t end)
@@ -548,4 +589,241 @@ TEST_CASE ("engine: a follower lane fed lane0's table via setCustomTable reprodu
     // values, and lane0 itself is unaffected by having a sibling on the same table.
     REQUIRE_THAT (e.getLaneValue (1), WithinAbs (e.getLaneValue (0), 1e-6));
     REQUIRE_THAT (e.getLaneValue (0), WithinAbs (ref.getLaneValue (0), 1e-6));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 Task 2: Pitch lane destination (LFO-modulated delay / vibrato) + folded
+// Phase 4 review hardening (decorrelated-L/R stereo band test; ShapeManager/engine
+// lane-count parity static_assert, added in source/shapes/ShapeManager.cpp since it's
+// the file that sees both constants).
+// ---------------------------------------------------------------------------
+
+TEST_CASE ("Pitch lane: vibrato deviation matches the analytic Doppler ratio at LFO extremes",
+           "[multilane][pitch]")
+{
+    const double sr = 48000.0;
+    const int n = static_cast<int> (sr); // 1.0 s
+
+    LaneParams pitchLane;
+    pitchLane.waveform = Waveform::Sine;
+    pitchLane.sync = false;
+    pitchLane.rateHz = 5.0;
+    pitchLane.depth = 1.0f;
+    pitchLane.dest = Dest::Pitch;
+    pitchLane.phaseOffset = 0.0f;
+
+    MultiLaneEngine e; e.prepare (sr, 4096); e.reset();
+    e.setLaneParams (0, pitchLane);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    const double carrierHz = 440.0;
+    std::vector<float> buf = makeSine (carrierHz, sr, n);
+    float* chans[1] = { buf.data() };
+    e.process (chans, 1, n);
+
+    // --- Analytic ground truth ---
+    // Engine mapping (one Pitch lane, depth=1): mod(phase) = 0.5 + 0.5*sin(2*pi*phase)
+    // (LfoCore::valueAt, Sine, unipolar). swingMs = (mod-0.5)*2*depth*kMaxSwingMs
+    //         = (0.5*sin(2*pi*phase)) * 2 * 1 * 10 = 10*sin(2*pi*phase).
+    // Lane rateHz=5, phaseOffset=0 -> phase(t) = frac(5t), so (periodic in phase)
+    //         swingMs(t) = 10*sin(2*pi*5*t) = 10*sin(theta), theta = 2*pi*5*t.
+    // delay(t) [seconds] = (kCenterMs + swingMs(t)) / 1000 = (12 + 10*sin(theta)) / 1000.
+    // d(delay)/dt = (10/1000) * (2*pi*5) * cos(theta) = A*omega*cos(theta),
+    //   A = kMaxSwingMs/1000 = 0.01 s, omega = 2*pi*5 = 31.415927 rad/s
+    //   max |d(delay)/dt| = A*omega = 0.01 * 31.415927 = 0.31415927  (matches spec's ~0.314)
+    // cos(theta) = +1 at theta = 0, 2*pi, ... -> t = 0, 0.2, 0.4, ... (down-shift instant)
+    // cos(theta) = -1 at theta = pi, 3*pi, ... -> t = 0.1, 0.3, 0.5, ... (up-shift instant)
+    // Doppler-style instantaneous frequency: output(t) = carrier(t - delay(t)), so the
+    // local "read time" read(t) = t - delay(t) advances at rate d(read)/dt = 1 - delay'(t);
+    // measured frequency f' = f * d(read)/dt = f * (1 - d(delay)/dt).
+    //   up-shift   (t=0.1s, delay'=-0.31415927): f' = 440 * (1 - (-0.31415927)) = 440 * 1.31415927 = 578.23 Hz
+    //   down-shift (t=0.2s, delay'=+0.31415927): f' = 440 * (1 -  0.31415927)  = 440 * 0.68584073 = 301.77 Hz
+    // (matches the spec's "~0.69*440 .. ~1.31*440" window.)
+    const double A = 10.0 / 1000.0;
+    const double omega = 2.0 * kPi * 5.0;
+    const double maxSlope = A * omega; // ~0.3141593
+    const double fUp   = carrierHz * (1.0 + maxSlope);
+    const double fDown = carrierHz * (1.0 - maxSlope);
+
+    const double windowSec = 0.020; // 20 ms
+    const int windowSamples = static_cast<int> (windowSec * sr);
+
+    // Up-shift window, centered at t=0.1s (theta=pi).
+    {
+        const int center = static_cast<int> (0.1 * sr);
+        const int start = center - windowSamples / 2;
+        const int end   = center + windowSamples / 2;
+        const double measured = zeroCrossingFreq (buf, start, end, sr);
+        REQUIRE (measured > 0.0);
+        REQUIRE_THAT (measured, WithinRel (fUp, 0.10));
+    }
+
+    // Down-shift window, centered at t=0.2s (theta=2*pi).
+    {
+        const int center = static_cast<int> (0.2 * sr);
+        const int start = center - windowSamples / 2;
+        const int end   = center + windowSamples / 2;
+        const double measured = zeroCrossingFreq (buf, start, end, sr);
+        REQUIRE (measured > 0.0);
+        REQUIRE_THAT (measured, WithinRel (fDown, 0.10));
+    }
+}
+
+TEST_CASE ("Pitch lane: a static (held) mod produces a constant delay, matching a bare ModDelay",
+           "[multilane][pitch]")
+{
+    // Square, rateHz=0.1 (period 10s): held HIGH (mod==1.0 exactly) for phase in [0,0.5),
+    // i.e. for the first 5 seconds. depth=1 -> swingMs = (1.0-0.5)*2*1*10 = 10 (constant,
+    // exact float arithmetic, no drift) for as long as the mod is held -- our comparison
+    // window (well inside that half-cycle) sees an EXACTLY constant delaySamples the whole
+    // time, so the mapping is time-invariant (no pitch bend) whenever the mod itself is.
+    const double sr = 48000.0;
+    const int n = static_cast<int> (sr); // 1.0 s -- comfortably inside the first 5s half-cycle
+
+    LaneParams pitchLane;
+    pitchLane.waveform = Waveform::Square;
+    pitchLane.sync = false;
+    pitchLane.rateHz = 0.1;
+    pitchLane.depth = 1.0f;
+    pitchLane.dest = Dest::Pitch;
+    pitchLane.phaseOffset = 0.0f;
+
+    MultiLaneEngine e; e.prepare (sr, 4096); e.reset();
+    e.setLaneParams (0, pitchLane);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    std::vector<float> buf = makeSine (300.0, sr, n);
+    const std::vector<float> input = buf; // keep a copy to feed the reference ModDelay
+    float* chans[1] = { buf.data() };
+    e.process (chans, 1, n);
+
+    // Reference: the SAME input, sample-for-sample, through a bare ModDelay at the
+    // expected constant delay. ModDelay::process() writes `in` unconditionally before
+    // reading, so its internal ring-buffer CONTENT/writePos trajectory depends only on
+    // the input sequence -- never on the delaySamples argument used on any call. That
+    // means a fresh ModDelay fed the identical input from sample 0 has bit-identical
+    // buffer content to the engine's internal pitchDelay at every sample n, so the two
+    // outputs match wherever the delaySamples used at that n also match (true here, for
+    // the whole buffer, since the mod is held constant throughout).
+    const double expectedSwingMs = (1.0 - 0.5) * 2.0 * 1.0 * MultiLaneEngine::kMaxSwingMs;
+    const double expectedDelaySamples = (MultiLaneEngine::kCenterMs + expectedSwingMs) * sr / 1000.0;
+
+    ModDelay ref; ref.prepare (sr, 0.064);
+    std::vector<float> refOut (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+        refOut[static_cast<size_t> (i)] = ref.process (input[static_cast<size_t> (i)],
+                                                         static_cast<float> (expectedDelaySamples));
+
+    // Compare only from well past the delay-line's own fill-in (the first
+    // ~expectedDelaySamples samples read mostly zero history in BOTH the engine and the
+    // reference -- they still match each other there, but we skip them anyway to keep
+    // this test's intent -- "matches a constant-delay reference" -- unambiguous).
+    const size_t skip = static_cast<size_t> (expectedDelaySamples) + 8;
+    for (size_t i = skip; i < static_cast<size_t> (n); ++i)
+        REQUIRE_THAT (buf[i], WithinAbs (refOut[i], 1e-5));
+}
+
+TEST_CASE ("Pitch lane: two full-depth same-phase lanes sum then clamp at +/-kMaxSwingMs (not 2x)",
+           "[multilane][pitch]")
+{
+    // Two identical Sine/1Hz/depth1/Pitch lanes, same phase: unclamped swing would be
+    // 2*10*sin(theta) = 20*sin(theta), which exceeds +/-kMaxSwingMs (10) whenever
+    // |sin(theta)| > 0.5 -- true for theta in [pi/6, 5pi/6] (and the mirror negative
+    // lobe). At rateHz=1, that's t in [1/12, 5/12] = [0.0833s, 0.4167s] for the clamped
+    // TOP (+10). We pick a window well inside that flat region -- [0.15s, 0.25s] -- where
+    // the clamped analytic swing is EXACTLY +kMaxSwingMs the whole time (not just at an
+    // instant), so (as in the static-mod test above) the engine's output there must match
+    // a bare ModDelay at the CLAMPED constant delay, not the (unreachable) unclamped one.
+    const double sr = 48000.0;
+    const int n = static_cast<int> (sr); // 1.0 s
+
+    LaneParams lane;
+    lane.waveform = Waveform::Sine;
+    lane.sync = false;
+    lane.rateHz = 1.0;
+    lane.depth = 1.0f;
+    lane.dest = Dest::Pitch;
+    lane.phaseOffset = 0.0f;
+
+    MultiLaneEngine e; e.prepare (sr, 4096); e.reset();
+    e.setLaneParams (0, lane);
+    e.setLaneParams (1, lane); // identical second Pitch lane, same phase -> sums, then clamps
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    std::vector<float> buf = makeSine (300.0, sr, n);
+    const std::vector<float> input = buf;
+    float* chans[1] = { buf.data() };
+    e.process (chans, 1, n);
+
+    const double clampedDelaySamples = (MultiLaneEngine::kCenterMs + MultiLaneEngine::kMaxSwingMs) * sr / 1000.0;
+    // Sanity: confirm the UNCLAMPED sum really would exceed the clamp at our window (i.e.
+    // this test is actually exercising the clamp, not a no-op).
+    const double unclampedSwingAtWindow = 20.0 * std::sin (2.0 * kPi * 1.0 * 0.20);
+    REQUIRE (unclampedSwingAtWindow > MultiLaneEngine::kMaxSwingMs);
+
+    ModDelay ref; ref.prepare (sr, 0.064);
+    std::vector<float> refOut (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+        refOut[static_cast<size_t> (i)] = ref.process (input[static_cast<size_t> (i)],
+                                                         static_cast<float> (clampedDelaySamples));
+
+    const int windowStart = static_cast<int> (0.15 * sr);
+    const int windowEnd   = static_cast<int> (0.25 * sr);
+    for (int i = windowStart; i < windowEnd; ++i)
+        REQUIRE_THAT (buf[static_cast<size_t> (i)], WithinAbs (refOut[static_cast<size_t> (i)], 1e-5));
+}
+
+TEST_CASE ("stereo band-split: decorrelated L/R (different-phase sines) still gate each channel independently correct",
+           "[multilane][band][stereo]")
+{
+    // Folded Phase 4 review hardening item: the earlier stereo band-split test used
+    // IDENTICAL L/R content, which can't distinguish "each channel gated independently"
+    // from "some accidental cross-channel coupling that happens to look right on matched
+    // input." Here L and R carry the SAME 100 Hz tone but at DIFFERENT phases, so a bug
+    // that leaked L's crossover state into R's (or vice versa) would show up as differing
+    // gated/open behavior between the two channels' own expectations.
+    const double sr = 48000.0;
+    const int n = static_cast<int> (sr);
+
+    LaneParams lowLane;
+    lowLane.waveform = Waveform::Square;
+    lowLane.sync = false;
+    lowLane.rateHz = 5.0;
+    lowLane.depth = 1.0f;
+    lowLane.dest = Dest::Low;
+    lowLane.phaseOffset = 0.0f;
+
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+
+    MultiLaneEngine e; e.prepare (sr, 4096); e.reset();
+    e.setLaneParams (0, lowLane);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    e.setGlobalParams (g);
+
+    // L at phase 0, R at phase pi/3 -- decorrelated, same 100 Hz frequency.
+    std::vector<float> l = makeSinePhase (100.0, sr, n, 0.0);
+    std::vector<float> r = makeSinePhase (100.0, sr, n, kPi / 3.0);
+    float* chans[2] = { l.data(), r.data() };
+    e.process (chans, 2, n);
+
+    // Same 5 Hz square gate (rateHz=5, sr=48000): period 9600 samples, gated half
+    // [0,4800), open half [4800,9600) -- identical windows used by the mono Low test.
+    // Each channel is checked against ITS OWN dB ratio (not cross-compared to the other),
+    // proving independent per-channel gating rather than coincidental symmetry.
+    const double gatedRmsL = rmsRange (l, 1200, 3600);
+    const double openRmsL  = rmsRange (l, 6000, 8400);
+    REQUIRE (gatedRmsL < 0.10 * openRmsL);
+
+    const double gatedRmsR = rmsRange (r, 1200, 3600);
+    const double openRmsR  = rmsRange (r, 6000, 8400);
+    REQUIRE (gatedRmsR < 0.10 * openRmsR);
 }

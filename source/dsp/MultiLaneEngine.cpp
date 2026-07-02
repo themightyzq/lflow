@@ -1,4 +1,5 @@
 #include "MultiLaneEngine.h"
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 
@@ -21,6 +22,19 @@ void MultiLaneEngine::prepare (double sr, int /*maxBlock*/) noexcept
         lowSplit[c].setFrequency (xoverLowHz);
         highSplit[c].setFrequency (xoverHighHz);
     }
+
+    // ModDelay::prepare() ALLOCATES (see ModDelay.h's allocation notice) -- called only
+    // here (prepareToPlay-equivalent), never from process(). Contract headroom check
+    // (per ModDelay.h's review): the usable delay range is [4, capacity-4], NOT
+    // [0, capacity] -- getMaxDelaySamples() returns the raw allocation size. We budget
+    // the max possible pitch delay EXPLICITLY from our own constants rather than
+    // deriving it from that getter: worst case is kCenterMs + kMaxSwingMs = 22 ms, vs.
+    // a 64 ms capacity -- e.g. at 48 kHz that's 22ms*48 = 1056 samples used out of
+    // (ceil(48000*0.064) - 4) = 3068 usable samples. Ample headroom at any real-world
+    // sample rate; the assert below is a regression guard, not the primary safety net.
+    for (int c = 0; c < kNumBandChannels; ++c)
+        pitchDelay[c].prepare (sampleRate, kPitchDelayCapacitySeconds);
+    assert ((kCenterMs + kMaxSwingMs) * sampleRate / 1000.0 <= pitchDelay[0].getMaxDelaySamples() - 4.0);
 
     reset();
 }
@@ -47,8 +61,10 @@ void MultiLaneEngine::reset() noexcept
     {
         lowSplit[c].reset();
         highSplit[c].reset();
+        pitchDelay[c].reset();
     }
     bandWasActive = false;
+    pitchWasActive = false;
 }
 
 void MultiLaneEngine::setCrossovers (double lowHz, double highHz) noexcept
@@ -130,6 +146,7 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
     double rates[kNumLanes];
     bool   anyActive = false;
     bool   bandActive = false;
+    bool   pitchActive = false;
 
     for (int i = 0; i < kNumLanes; ++i)
     {
@@ -164,6 +181,9 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
 
         if (lane.params.dest == Dest::Low || lane.params.dest == Dest::Mid || lane.params.dest == Dest::High)
             bandActive = true;
+
+        if (lane.params.dest == Dest::Pitch)
+            pitchActive = true;
     }
 
     // Engaged -> disengaged transition: clear crossover filter memory. A one-time
@@ -180,6 +200,17 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
             highSplit[c].reset();
         }
     bandWasActive = bandActive;
+
+    // Same engage/disengage doctrine as the band path above, for the Pitch delay
+    // line: disengaging (no lane targeting Pitch with depth>0 anymore) resets the
+    // delay so stale buffered audio can't bleed into a later re-engage. The ENGAGE
+    // edge carries the equivalent bounded one-time transient (dry -> ~12ms-delayed
+    // jump as the delay line fills from zero state) -- accepted per the Phase 5
+    // design doc, same doctrine as the band split's engage transient above.
+    if (pitchWasActive && ! pitchActive)
+        for (int c = 0; c < kNumBandChannels; ++c)
+            pitchDelay[c].reset();
+    pitchWasActive = pitchActive;
 
     // Depth-0-everywhere: the buffer is an exact no-op (bit-identical regardless of
     // mix/smooth), but lane clocks still advance below per the lockstep fix above.
@@ -199,6 +230,7 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
         float gainL = 1.0f;
         float gainR = 1.0f;
         float bandGain[3] = { 1.0f, 1.0f, 1.0f }; // Low, Mid, High (mono, applied to both channels)
+        float swingMs = 0.0f; // Pitch lanes sum into this (mono modulator), clamped below
 
         for (int i = 0; i < kNumLanes; ++i)
         {
@@ -233,6 +265,16 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
                 case Dest::Mid:  bandGain[1] *= gL; break;
                 case Dest::High: bandGain[2] *= gL; break;
 
+                // Pitch lanes are mono modulators (L smoothing stream only, like the
+                // band lanes above) and contribute ONLY swing -- explicitly NOT
+                // volume/pan gain (per the Phase 5 design: a Pitch lane must not also
+                // gate level). Bipolar mapping: modL in [0,1] -> swing contribution
+                // (modL - 0.5) * 2 * depth * kMaxSwingMs, summed across all Pitch
+                // lanes and clamped to +/-kMaxSwingMs once, after the per-sample loop.
+                case Dest::Pitch:
+                    swingMs += (modL - 0.5f) * 2.0f * depth * static_cast<float> (kMaxSwingMs);
+                    break;
+
                 case Dest::Volume:
                 default:
                     gainL *= gL;
@@ -262,12 +304,34 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
             }
         }
 
+        // PITCH stage: clamp the lanes' summed swing once, then map to a delay time.
+        // Signal order (per the Phase 5 design): bands (split -> gains -> sum) ->
+        // PITCH (this mod delay) -> Volume/Pan lane gains -> mix, applied below.
+        float delaySamplesF = 0.0f;
+        if (pitchActive)
+        {
+            const float maxSwingF = static_cast<float> (kMaxSwingMs);
+            float clampedSwing = swingMs;
+            if (clampedSwing > maxSwingF)  clampedSwing = maxSwingF;
+            if (clampedSwing < -maxSwingF) clampedSwing = -maxSwingF;
+            const double delayMs = kCenterMs + static_cast<double> (clampedSwing);
+            delaySamplesF = static_cast<float> (delayMs * sampleRate / 1000.0);
+        }
+
         for (int c = 0; c < numChannels; ++c)
         {
             float* d = channels[c];
             const float dry = d[n];
             const float g = (c == 1) ? gainR : gainL;
-            const float wetSource = (bandActive && c < kNumBandChannels) ? bandSummed[c] : dry;
+            float wetSource = (bandActive && c < kNumBandChannels) ? bandSummed[c] : dry;
+
+            // Only channels 0/1 get a delay line (same 2-channel limitation as the
+            // band split above); channels beyond index 1 pass through untouched.
+            // When no lane targets Pitch, this is skipped entirely -- no delay, no
+            // latency, bit-identical to Phase 4 (transparency).
+            if (pitchActive && c < kNumBandChannels)
+                wetSource = pitchDelay[c].process (wetSource, delaySamplesF);
+
             d[n] = dry * (1.0f - mix) + (wetSource * g) * mix;
         }
 

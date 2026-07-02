@@ -1,4 +1,5 @@
 #include "ShapeManager.h"
+#include "MultiLaneEngine.h"
 #include <algorithm>
 
 // ValueTree layout (persisted, part of apvts.state -> XML round-trip via get/setStateInformation):
@@ -8,6 +9,15 @@
 //     <SHAPE lane="2"> ... </SHAPE>
 //   </SHAPES>
 namespace lflow {
+
+// Folded Phase 4 review hardening item (picked up in Phase 5 Task 2): ShapeManager's
+// per-lane node/table bookkeeping and MultiLaneEngine's lane array are two independently
+// hardcoded "3 lanes" -- this file is the one place that already includes both headers,
+// so it's where a future change to either constant without the other gets caught at
+// compile time rather than silently drifting (e.g. a 4th UI lane with no engine lane
+// behind it, or vice versa).
+static_assert (ShapeManager::kNumLanes == MultiLaneEngine::kNumLanes,
+               "ShapeManager and MultiLaneEngine must agree on the number of lanes");
 
 namespace {
 const juce::Identifier kShapesType { "SHAPES" };

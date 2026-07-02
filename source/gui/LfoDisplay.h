@@ -82,8 +82,9 @@ private:
     void rebuildPathIfNeeded (LaneState&);
 
     // Edit-mode rendering: rebakes editTable from editNodes (called on every edit, cheap --
-    // <=32 nodes into a 256-float table) and rebuilds editPath from editTable + the edited
-    // lane's phase offset (called lazily from paint(), only when dirty).
+    // <=32 nodes into a 256-float table) and rebuilds editPath from editTable in unshifted
+    // shape space -- no phase offset baked in, so it lines up with nodeToScreen/hit-testing
+    // (called lazily from paint(), only when dirty).
     void rebakeEditTable();
     void rebuildEditPath();
 

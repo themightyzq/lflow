@@ -95,16 +95,15 @@ void LfoDisplay::rebuildEditPath()
     if (editLane < 0)
         return;
 
-    const float phaseOffset = lanes[(size_t) editLane].phaseOffset;
-
+    // Unshifted shape space: no phase offset baked in here, so this curve lines up with
+    // nodeToScreen/findNodeNear/findSegmentNear, which all key off raw node x. See paint()'s
+    // marker-x branch for the edit lane, which matches this by using the reported phase directly.
     juce::Path p;
     constexpr int N = 128;
     for (int i = 0; i < N; ++i)
     {
         const float x = (float) i / (float) (N - 1);
-        float ph = x + phaseOffset;
-        ph -= std::floor (ph);
-        const float v = lflow::shapeTableValue (editTable, lflow::kShapeTableSize, ph);
+        const float v = lflow::shapeTableValue (editTable, lflow::kShapeTableSize, x);
         const float y = 1.0f - v;
         if (i == 0) p.startNewSubPath (x, y);
         else        p.lineTo (x, y);
@@ -396,12 +395,23 @@ void LfoDisplay::paint (juce::Graphics& g)
 
         if (lane.active)
         {
-            // Undo the phase offset baked into the reported phase so the marker's x lines up
-            // with the same raw-cycle x-axis the curve was drawn against.
-            float rawPhase = lane.phase - lane.phaseOffset;
-            rawPhase -= std::floor (rawPhase);
+            float markerX;
+            if (isEditLane)
+            {
+                // Edit lane's curve is unshifted shape space (see rebuildEditPath), and
+                // shape(reportedPhase) is exactly what's being played, so the reported phase
+                // IS the marker's x here -- no de-offsetting.
+                markerX = lane.phase;
+            }
+            else
+            {
+                // Non-edit lanes' curves are baked with the phase offset applied (see
+                // rebuildPathIfNeeded), so undo it here to land back on that same x-axis.
+                markerX = lane.phase - lane.phaseOffset;
+            }
+            markerX -= std::floor (markerX);
 
-            const float mx = r.getX() + rawPhase * r.getWidth();
+            const float mx = r.getX() + markerX * r.getWidth();
             const float my = r.getBottom() - lane.value * r.getHeight();
             g.setColour (colour);
             g.fillEllipse (mx - 4.0f, my - 4.0f, 8.0f, 8.0f);

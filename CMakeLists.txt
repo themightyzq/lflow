@@ -49,9 +49,10 @@ target_sources(LFlOw PRIVATE
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
     source/params/ParameterLayout.cpp
-    source/gui/LfoDisplay.cpp)
+    source/gui/LfoDisplay.cpp
+    source/shapes/ShapeManager.cpp)
 
-target_include_directories(LFlOw PRIVATE source source/params source/dsp source/gui)
+target_include_directories(LFlOw PRIVATE source source/params source/dsp source/gui source/shapes)
 
 target_compile_definitions(LFlOw PUBLIC
     JUCE_WEB_BROWSER=0
@@ -60,7 +61,7 @@ target_compile_definitions(LFlOw PUBLIC
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0)
 
-if(APPLE)
+if(UNIX AND NOT APPLE)
     target_compile_definitions(LFlOw PUBLIC JUCE_JACK=0 JUCE_ALSA=0)
 endif()
 

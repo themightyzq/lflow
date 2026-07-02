@@ -1,0 +1,90 @@
+#pragma once
+#include <JuceHeader.h>
+#include "ShapeModel.h"
+#include "TripleBuffer.h"
+#include <vector>
+
+// Message-thread owner of the SHAPES ValueTree subtree (per-lane, per-lane-drawn breakpoint
+// node lists persisted alongside the rest of the plugin's APVTS state) and the bridge that
+// bakes those node lists into the lock-free ShapeTableBuffer lookup tables consumed by the
+// audio thread. JUCE is used freely here (ValueTree, listeners, XML round-trip) -- this is
+// explicitly message/main-thread code, mirroring the rest of the JUCE-side plugin glue.
+//
+// THREADING: every public member function, and every juce::ValueTree::Listener callback, is
+// message-thread only (the same thread APVTS itself is driven from: parameter changes,
+// getStateInformation/setStateInformation, and UI edits). Nothing here is ever called from
+// processBlock(). The audio thread only ever touches ShapeTableBuffer via its own acquire()
+// (see TripleBuffer.h) -- ShapeManager is the sole producer/publisher for those buffers.
+namespace lflow {
+
+class ShapeManager : private juce::ValueTree::Listener
+{
+public:
+    static constexpr int kNumLanes = 3;
+
+    // `buffersIn` must point to an array of at least kNumLanes ShapeTableBuffer objects, owned
+    // by (and outliving) the processor. `apvtsIn` must outlive this ShapeManager. Ensures the
+    // SHAPES/SHAPE/NODE subtree exists (creating per-lane defaults if absent) and bakes +
+    // publishes all 3 lanes' initial tables before returning, so the very first processBlock()
+    // already has a real, valid table via hasEverPublished().
+    ShapeManager (juce::AudioProcessorValueTreeState& apvtsIn, ShapeTableBuffer* buffersIn);
+    ~ShapeManager() override;
+
+    // Returns a copy of lane's current node list, read straight from the ValueTree. Message
+    // thread only.
+    std::vector<ShapeNode> getNodes (int lane) const;
+
+    // Replaces lane's node list in the ValueTree (which in turn triggers this ShapeManager's
+    // own listener callback, which bakes + publishes -- see class comment). Validation, in
+    // order:
+    //   - each node's x/y clamped to [0,1], curve clamped to [-1,1];
+    //   - sorted by ascending x (stable, so caller-supplied order of same-x nodes is kept);
+    //   - capped at kMaxShapeNodes -- if more are supplied, the LAST (kMaxShapeNodes) after
+    //     sorting are kept (i.e. nodes with the smallest x are dropped first), since losing
+    //     nodes from the flat low end changes the shape less than losing nodes from the high
+    //     end for a typically-left-to-right-drawn shape... in practice this only matters for
+    //     malformed/oversized input; normal editing never exceeds the cap.
+    //   - if fewer than 2 nodes survive (empty or single-node input), the request is REJECTED
+    //     and the default rise-fall triangle (0,0)(0.5,1)(1,0) is written instead -- a shape
+    //     needs at least 2 breakpoints to describe a segment at all, so rather than persist a
+    //     degenerate table we fall back to something well-defined and audible.
+    // Message thread only.
+    void setNodes (int lane, const std::vector<ShapeNode>& nodes);
+
+private:
+    // juce::ValueTree::Listener overrides. All fire on the message thread (the thread that
+    // mutates the tree -- setNodes(), or JUCE calling apvts.replaceState() during
+    // setStateInformation()). On any change touching our SHAPES subtree, every lane is
+    // rebaked + republished (see rebakeAndPublishAll(); cheap enough -- 3 x 256 floats -- to
+    // not bother diffing which lane actually changed).
+    void valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property) override;
+    void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override;
+    void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int index) override;
+    void valueTreeChildOrderChanged (juce::ValueTree& parent, int oldIndex, int newIndex) override;
+    void valueTreeRedirected (juce::ValueTree& treeWhichHasBeenChanged) override;
+
+    // Locates (or creates, with per-lane defaults) the SHAPES child of apvts.state and its 3
+    // SHAPE children. Safe to call repeatedly / after a redirect -- idempotent.
+    void ensureShapesTree();
+
+    // True if `tree` (or one of its ancestors, up to but excluding apvts.state itself) is part
+    // of our SHAPES subtree -- i.e. tree's type is SHAPES, SHAPE, or NODE. Used to ignore the
+    // (far more frequent) property-changed callbacks for ordinary parameter value nodes, since
+    // ShapeManager's listener is registered on the whole apvts.state tree (required to observe
+    // valueTreeRedirected, which only fires on the exact ValueTree instance reassigned by
+    // AudioProcessorValueTreeState::replaceState()).
+    static bool isShapeType (const juce::ValueTree& tree) noexcept;
+
+    juce::ValueTree getShapeChild (int lane) const;
+    static void writeDefaultNodes (juce::ValueTree& shapeChild);
+    void rebakeAndPublish (int lane);
+    void rebakeAndPublishAll();
+
+    juce::AudioProcessorValueTreeState& apvts;
+    ShapeTableBuffer* buffers;
+    juce::ValueTree shapesTree;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ShapeManager)
+};
+
+} // namespace lflow

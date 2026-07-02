@@ -36,6 +36,10 @@ LFlOwAudioProcessor::LFlOwAudioProcessor()
       apvts (*this, nullptr, "PARAMS", lflow::createParameterLayout())
 {
     bypassParam = apvts.getParameter (lflow::pid::bypass);
+
+    // Constructed AFTER apvts: ensures/loads the SHAPES ValueTree subtree and does the
+    // initial bake+publish for all 3 lanes (shapeBuffers already default-constructed above).
+    shapeManager = std::make_unique<lflow::ShapeManager> (apvts, shapeBuffers);
 }
 
 void LFlOwAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -95,6 +99,24 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const double xoverLow  = (double) apvts.getRawParameterValue (lflow::pid::xoverLow)->load();
     const double xoverHigh = (double) apvts.getRawParameterValue (lflow::pid::xoverHigh)->load();
     engine.setCrossovers (xoverLow, xoverHigh);
+
+    // Custom-shape tables: acquire() is wait-free (single atomic exchange at most), so it's
+    // safe to call once per lane, per block, right here on the audio thread. Linked-follower
+    // routing: when Link is ON, lanes 1-2 (indices 1,2) forward LANE 0's acquired table
+    // instead of their own, mirroring resolveLinkedLanes() copying lane 0's waveform choice to
+    // the followers above (Phase 4 design: the shape itself isn't a motion field, but
+    // `waveform` is, so a linked Custom follower tracks lane 0's shape).
+    const lflow::ShapeTable* acquired[lflow::MultiLaneEngine::kNumLanes];
+    for (int i = 0; i < lflow::MultiLaneEngine::kNumLanes; ++i)
+        acquired[i] = shapeBuffers[i].acquire();
+
+    for (int i = 0; i < lflow::MultiLaneEngine::kNumLanes; ++i)
+    {
+        const int sourceLane = (link && i != 0) ? 0 : i;
+        const auto* table = acquired[sourceLane];
+        const bool published = shapeBuffers[sourceLane].hasEverPublished();
+        engine.setCustomTable (i, published ? table->data : nullptr, lflow::kShapeTableSize);
+    }
 
     // Transport.
     bool playing = false; double bpm = 120.0, ppq = 0.0;

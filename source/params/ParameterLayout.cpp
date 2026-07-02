@@ -8,7 +8,10 @@ namespace {
 using namespace juce;
 
 // Choice lists shared across all 3 lanes (Phase 1 order).
-const StringArray waveformChoices { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" };
+// "Custom" appended (index 6, Waveform::Custom) -- Phase 4 drawable shapes. Layout only: the
+// editor's waveform combo literal gains the matching entry in Task 3. Appending (rather than
+// inserting) keeps every existing preset's saved choice index stable.
+const StringArray waveformChoices { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold", "Custom" };
 const StringArray divisionChoices { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" };
 const StringArray rhythmChoices   { "Straight", "Dotted", "Triplet" };
 const StringArray destChoices     { "Volume", "Pan", "Low", "Mid", "High" };

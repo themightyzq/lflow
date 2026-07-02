@@ -1,7 +1,10 @@
 #pragma once
 #include <JuceHeader.h>
 #include "dsp/MultiLaneEngine.h"
+#include "dsp/TripleBuffer.h"
+#include "shapes/ShapeManager.h"
 #include <atomic>
+#include <memory>
 
 class LFlOwAudioProcessor : public juce::AudioProcessor
 {
@@ -36,6 +39,9 @@ public:
 
     juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
 
+    // Message-thread accessor for the editor (Task 3) to read/edit per-lane shape node lists.
+    lflow::ShapeManager& getShapeManager() noexcept { return *shapeManager; }
+
     float getLanePhase (int lane) const noexcept
     {
         return (lane >= 0 && lane < lflow::MultiLaneEngine::kNumLanes) ? lanePhaseAtomic[(size_t) lane].load() : 0.0f;
@@ -49,6 +55,16 @@ private:
     juce::AudioProcessorValueTreeState apvts;
     juce::AudioProcessorParameter* bypassParam { nullptr };
     lflow::MultiLaneEngine engine;
+
+    // Per-lane custom-shape lookup tables, published lock-free by shapeManager (message
+    // thread) and acquired once per block in processBlock() (audio thread). Declared BEFORE
+    // shapeManager so they're fully constructed by the time its ctor runs (and outlive it).
+    lflow::ShapeTableBuffer shapeBuffers[lflow::MultiLaneEngine::kNumLanes];
+
+    // Constructed AFTER apvts (needs a live APVTS reference) in the ctor init list; owns the
+    // SHAPES ValueTree subtree and bakes+publishes into shapeBuffers on any shape change
+    // (including state reloads). Message-thread only -- see ShapeManager.h.
+    std::unique_ptr<lflow::ShapeManager> shapeManager;
 
     // Bus layout is restricted to mono/stereo (isBusesLayoutSupported); 8 is safe headroom
     // for the chunked-processing channel-pointer array in processBlock.

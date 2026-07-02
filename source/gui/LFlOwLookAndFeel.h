@@ -14,6 +14,11 @@ public:
         static constexpr juce::uint32 onSurface       = 0xffe8e8ee;
         static constexpr juce::uint32 onSurfaceVariant= 0xff9a9aa6;
         static constexpr juce::uint32 primary         = 0xffff6bb5; // modulation pink
+
+        // Lane accent colors (index-matched to lane 1/2/3 in the UI and in LfoDisplay).
+        static constexpr juce::uint32 lane0            = 0xffff6bb5; // lane 1 — pink (== primary)
+        static constexpr juce::uint32 lane1            = 0xff9b7adb; // lane 2 — purple
+        static constexpr juce::uint32 lane2            = 0xffffab00; // lane 3 — amber
     };
 
     LFlOwLookAndFeel()

@@ -1,6 +1,73 @@
 #include "LfoDisplay.h"
 #include "LFlOwLookAndFeel.h"
 
+namespace
+{
+constexpr juce::uint32 laneColour (int lane)
+{
+    using C = LFlOwLookAndFeel::Colors;
+    switch (lane)
+    {
+        case 0:  return C::lane0;
+        case 1:  return C::lane1;
+        default: return C::lane2;
+    }
+}
+} // namespace
+
+void LfoDisplay::setLane (int lane, lflow::Waveform waveform, float phaseOffset01, bool active)
+{
+    if (lane < 0 || lane >= kNumLanes)
+        return;
+
+    auto& l = lanes[(size_t) lane];
+    l.waveform = waveform;
+    l.phaseOffset = phaseOffset01;
+    l.active = active;
+    repaint();
+}
+
+void LfoDisplay::setLanePosition (int lane, float phase01, float value01)
+{
+    if (lane < 0 || lane >= kNumLanes)
+        return;
+
+    auto& l = lanes[(size_t) lane];
+    l.phase = phase01;
+    l.value = value01;
+    repaint();
+}
+
+void LfoDisplay::rebuildPathIfNeeded (LaneState& lane)
+{
+    if (lane.pathValid
+        && lane.pathWaveform == lane.waveform
+        && juce::approximatelyEqual (lane.pathPhaseOffset, lane.phaseOffset))
+        return;
+
+    lflow::LfoCore core;
+    core.setWaveform (lane.waveform);
+    core.reset (1u);
+
+    juce::Path p;
+    constexpr int N = 128;
+    for (int i = 0; i < N; ++i)
+    {
+        const float x = (float) i / (float) (N - 1);
+        float ph = x + lane.phaseOffset;
+        ph -= std::floor (ph);
+        const float v = core.valueAt (ph); // curve(x) = valueAt(frac(x + offset))
+        const float y = 1.0f - v;          // unit square: y grows downward, value grows upward
+        if (i == 0) p.startNewSubPath (x, y);
+        else        p.lineTo (x, y);
+    }
+
+    lane.path = p;
+    lane.pathValid = true;
+    lane.pathWaveform = lane.waveform;
+    lane.pathPhaseOffset = lane.phaseOffset;
+}
+
 void LfoDisplay::paint (juce::Graphics& g)
 {
     using C = LFlOwLookAndFeel::Colors;
@@ -10,27 +77,29 @@ void LfoDisplay::paint (juce::Graphics& g)
     g.setColour (juce::Colour (C::outline));
     g.drawRoundedRectangle (r, 6.0f, 1.0f);
 
-    lflow::LfoCore core; core.setWaveform (waveform); core.reset (1u);
+    const auto transform = juce::AffineTransform::scale (r.getWidth(), r.getHeight())
+                                .translated (r.getX(), r.getY());
 
-    juce::Path path;
-    const int N = juce::jmax (2, (int) r.getWidth());
-    for (int i = 0; i < N; ++i)
+    for (int i = 0; i < kNumLanes; ++i)
     {
-        const float ph = (float) i / (float) (N - 1);
-        const float v  = core.valueAt (ph);            // 0..1
-        const float x  = r.getX() + ph * r.getWidth();
-        const float y  = r.getBottom() - v * r.getHeight();
-        if (i == 0) path.startNewSubPath (x, y);
-        else        path.lineTo (x, y);
-    }
-    g.setColour (juce::Colour (C::primary));
-    g.strokePath (path, juce::PathStrokeType (2.0f));
+        auto& lane = lanes[(size_t) i];
+        rebuildPathIfNeeded (lane);
 
-    // live marker
-    const float mx = r.getX() + phase * r.getWidth();
-    const float my = r.getBottom() - value * r.getHeight();
-    g.setColour (juce::Colour (C::onSurface));
-    g.fillEllipse (mx - 4.0f, my - 4.0f, 8.0f, 8.0f);
-    g.setColour (juce::Colour (C::onSurface).withAlpha (0.2f));
-    g.drawVerticalLine ((int) mx, r.getY(), r.getBottom());
+        const auto colour = juce::Colour (laneColour (i));
+        g.setColour (lane.active ? colour : colour.withAlpha (0.35f));
+        g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
+
+        if (lane.active)
+        {
+            // Undo the phase offset baked into the reported phase so the marker's x lines up
+            // with the same raw-cycle x-axis the curve was drawn against.
+            float rawPhase = lane.phase - lane.phaseOffset;
+            rawPhase -= std::floor (rawPhase);
+
+            const float mx = r.getX() + rawPhase * r.getWidth();
+            const float my = r.getBottom() - lane.value * r.getHeight();
+            g.setColour (colour);
+            g.fillEllipse (mx - 4.0f, my - 4.0f, 8.0f, 8.0f);
+        }
+    }
 }

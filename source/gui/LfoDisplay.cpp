@@ -7,6 +7,9 @@ void LfoDisplay::setLane (int lane, lflow::Waveform waveform, float phaseOffset0
         return;
 
     auto& l = lanes[(size_t) lane];
+    if (lane == editLane && ! juce::approximatelyEqual (l.phaseOffset, phaseOffset01))
+        editPathDirty = true;
+
     l.waveform = waveform;
     l.phaseOffset = phaseOffset01;
     l.active = active;
@@ -22,6 +25,54 @@ void LfoDisplay::setLanePosition (int lane, float phase01, float value01)
     l.phase = phase01;
     l.value = value01;
     repaint();
+}
+
+void LfoDisplay::setEditLane (int laneOrMinus1)
+{
+    if (laneOrMinus1 == editLane)
+        return;
+
+    editLane = laneOrMinus1;
+    dragNodeIndex = -1;
+    dragSegmentIndex = -1;
+    editPathDirty = true;
+    repaint();
+}
+
+void LfoDisplay::setEditNodes (const std::vector<lflow::ShapeNode>& nodes)
+{
+    editNodes = nodes;
+    rebakeEditTable();
+    editPathDirty = true;
+    repaint();
+}
+
+void LfoDisplay::rebakeEditTable()
+{
+    lflow::bakeShapeTable (editNodes.empty() ? nullptr : editNodes.data(),
+                            (int) editNodes.size(), editTable, lflow::kShapeTableSize);
+}
+
+void LfoDisplay::rebuildEditPath()
+{
+    if (editLane < 0)
+        return;
+
+    const float phaseOffset = lanes[(size_t) editLane].phaseOffset;
+
+    juce::Path p;
+    constexpr int N = 128;
+    for (int i = 0; i < N; ++i)
+    {
+        const float x = (float) i / (float) (N - 1);
+        float ph = x + phaseOffset;
+        ph -= std::floor (ph);
+        const float v = lflow::shapeTableValue (editTable, lflow::kShapeTableSize, ph);
+        const float y = 1.0f - v;
+        if (i == 0) p.startNewSubPath (x, y);
+        else        p.lineTo (x, y);
+    }
+    editPath = p;
 }
 
 void LfoDisplay::rebuildPathIfNeeded (LaneState& lane)
@@ -54,6 +105,198 @@ void LfoDisplay::rebuildPathIfNeeded (LaneState& lane)
     lane.pathPhaseOffset = lane.phaseOffset;
 }
 
+juce::Rectangle<float> LfoDisplay::displayArea() const noexcept
+{
+    return getLocalBounds().toFloat().reduced (6.0f);
+}
+
+juce::Point<float> LfoDisplay::nodeToScreen (const lflow::ShapeNode& n) const noexcept
+{
+    const auto r = displayArea();
+    return { r.getX() + n.x * r.getWidth(), r.getY() + (1.0f - n.y) * r.getHeight() };
+}
+
+int LfoDisplay::findNodeNear (juce::Point<float> screenPos) const noexcept
+{
+    int best = -1;
+    float bestDist = kNodeHitRadius;
+    for (size_t i = 0; i < editNodes.size(); ++i)
+    {
+        const float d = nodeToScreen (editNodes[i]).getDistanceFrom (screenPos);
+        if (d <= bestDist)
+        {
+            bestDist = d;
+            best = (int) i;
+        }
+    }
+    return best;
+}
+
+float LfoDisplay::curveValueAt (float x) const noexcept
+{
+    // Avoid shapeTableValue's phase-wrap kicking in exactly at x == 1.0 (which would fold
+    // back to the table's start rather than the flat-extended end value).
+    x = juce::jlimit (0.0f, 0.999999f, x);
+    return lflow::shapeTableValue (editTable, lflow::kShapeTableSize, x);
+}
+
+int LfoDisplay::findSegmentNear (juce::Point<float> screenPos) const noexcept
+{
+    if (editNodes.size() < 2)
+        return -1;
+
+    const auto r = displayArea();
+    if (r.getWidth() <= 0.0f)
+        return -1;
+
+    const float x = (screenPos.x - r.getX()) / r.getWidth();
+    const float firstX = editNodes.front().x;
+    const float lastX  = editNodes.back().x;
+    if (x < firstX || x > lastX)
+        return -1; // flat extension either side of the drawn nodes -- not a bendable segment
+
+    for (size_t j = 0; j + 1 < editNodes.size(); ++j)
+    {
+        if (x >= editNodes[j].x && x <= editNodes[j + 1].x)
+        {
+            const float v = curveValueAt (x);
+            const float y = r.getBottom() - v * r.getHeight();
+            if (std::abs (y - screenPos.y) <= kSegmentHitTolerance)
+                return (int) j;
+            return -1;
+        }
+    }
+    return -1;
+}
+
+void LfoDisplay::mouseDown (const juce::MouseEvent& e)
+{
+    dragNodeIndex = -1;
+    dragSegmentIndex = -1;
+
+    if (editLane < 0)
+        return;
+
+    const int hitNode = findNodeNear (e.position);
+    if (hitNode >= 0)
+    {
+        dragNodeIndex = hitNode;
+        return;
+    }
+
+    const int hitSeg = findSegmentNear (e.position);
+    if (hitSeg >= 0)
+    {
+        dragSegmentIndex = hitSeg;
+        dragStartScreenY = e.position.y;
+        dragStartCurve = editNodes[(size_t) hitSeg].curve;
+        return;
+    }
+
+    // Empty space: add a node here (ignored past the 32-node cap).
+    if ((int) editNodes.size() >= lflow::kMaxShapeNodes)
+        return;
+
+    const auto r = displayArea();
+    if (r.getWidth() <= 0.0f || r.getHeight() <= 0.0f)
+        return;
+
+    float x = (e.position.x - r.getX()) / r.getWidth();
+    float y = 1.0f - (e.position.y - r.getY()) / r.getHeight();
+    x = juce::jlimit (0.0f, 1.0f, x);
+    y = juce::jlimit (0.0f, 1.0f, y);
+
+    size_t insertAt = editNodes.size();
+    for (size_t i = 0; i < editNodes.size(); ++i)
+    {
+        if (x < editNodes[i].x)
+        {
+            insertAt = i;
+            break;
+        }
+    }
+
+    editNodes.insert (editNodes.begin() + (long) insertAt, lflow::ShapeNode { x, y, 0.0f });
+    dragNodeIndex = (int) insertAt; // lets the same gesture drag the just-added node into place
+    rebakeEditTable();
+    editPathDirty = true;
+    repaint();
+    if (onNodesEdited)
+        onNodesEdited (editNodes);
+}
+
+void LfoDisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (editLane < 0)
+        return;
+
+    const auto r = displayArea();
+    if (r.getWidth() <= 0.0f || r.getHeight() <= 0.0f)
+        return;
+
+    if (dragNodeIndex >= 0 && dragNodeIndex < (int) editNodes.size())
+    {
+        auto& n = editNodes[(size_t) dragNodeIndex];
+
+        const float leftBound  = (dragNodeIndex > 0)
+            ? editNodes[(size_t) dragNodeIndex - 1].x : 0.0f;
+        const float rightBound = (dragNodeIndex + 1 < (int) editNodes.size())
+            ? editNodes[(size_t) dragNodeIndex + 1].x : 1.0f;
+
+        const float x = (e.position.x - r.getX()) / r.getWidth();
+        const float y = 1.0f - (e.position.y - r.getY()) / r.getHeight();
+
+        n.x = juce::jlimit (leftBound, rightBound, x);
+        n.y = juce::jlimit (0.0f, 1.0f, y);
+
+        rebakeEditTable();
+        editPathDirty = true;
+        repaint();
+        if (onNodesEdited)
+            onNodesEdited (editNodes);
+        return;
+    }
+
+    if (dragSegmentIndex >= 0 && dragSegmentIndex < (int) editNodes.size())
+    {
+        const float deltaY = dragStartScreenY - e.position.y; // dragging up increases curve
+        const float curveDelta = deltaY / r.getHeight();      // full display height => +-1
+        editNodes[(size_t) dragSegmentIndex].curve =
+            juce::jlimit (-1.0f, 1.0f, dragStartCurve + curveDelta);
+
+        rebakeEditTable();
+        editPathDirty = true;
+        repaint();
+        if (onNodesEdited)
+            onNodesEdited (editNodes);
+    }
+}
+
+void LfoDisplay::mouseUp (const juce::MouseEvent&)
+{
+    dragNodeIndex = -1;
+    dragSegmentIndex = -1;
+}
+
+void LfoDisplay::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (editLane < 0)
+        return;
+
+    const int hit = findNodeNear (e.position);
+    if (hit < 0 || editNodes.size() <= 2)
+        return; // at least 2 nodes must remain
+
+    editNodes.erase (editNodes.begin() + hit);
+    dragNodeIndex = -1;
+    dragSegmentIndex = -1;
+    rebakeEditTable();
+    editPathDirty = true;
+    repaint();
+    if (onNodesEdited)
+        onNodesEdited (editNodes);
+}
+
 void LfoDisplay::paint (juce::Graphics& g)
 {
     using C = LFlOwLookAndFeel::Colors;
@@ -66,14 +309,39 @@ void LfoDisplay::paint (juce::Graphics& g)
     const auto transform = juce::AffineTransform::scale (r.getWidth(), r.getHeight())
                                 .translated (r.getX(), r.getY());
 
+    if (editLane >= 0 && editPathDirty)
+    {
+        rebuildEditPath();
+        editPathDirty = false;
+    }
+
     for (int i = 0; i < kNumLanes; ++i)
     {
         auto& lane = lanes[(size_t) i];
-        rebuildPathIfNeeded (lane);
-
+        const bool isEditLane = (i == editLane);
         const auto colour = juce::Colour (LFlOwLookAndFeel::laneColour (i));
-        g.setColour (lane.active ? colour : colour.withAlpha (0.35f));
-        g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
+
+        if (isEditLane)
+        {
+            g.setColour (colour);
+            g.strokePath (editPath, juce::PathStrokeType (2.5f), transform);
+
+            for (auto& n : editNodes)
+            {
+                const auto p = nodeToScreen (n);
+                g.setColour (colour);
+                g.fillRect (juce::Rectangle<float> (kNodeHandleSize, kNodeHandleSize)
+                                .withCentre (p));
+            }
+        }
+        else
+        {
+            rebuildPathIfNeeded (lane);
+            // Other lanes dim harder than usual while another lane is in edit mode.
+            const float alpha = (editLane >= 0) ? 0.12f : (lane.active ? 1.0f : 0.35f);
+            g.setColour (colour.withAlpha (alpha));
+            g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
+        }
 
         if (lane.active)
         {

@@ -39,11 +39,30 @@ void LFlOwAudioProcessorEditor::LaneChip::paint (juce::Graphics& g)
 {
     using C = LFlOwLookAndFeel::Colors;
     auto r = getLocalBounds().toFloat();
+    if (editActive)
+    {
+        g.setColour (juce::Colour (C::onSurface));
+        g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 2.0f);
+    }
     g.setColour (juce::Colour (colour));
-    g.fillRoundedRectangle (r, 4.0f);
+    g.fillRoundedRectangle (r.reduced (editActive ? 2.0f : 0.0f), 4.0f);
     g.setColour (juce::Colour (C::background));
     g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     g.drawText (juce::String (number), getLocalBounds(), juce::Justification::centred, false);
+}
+
+void LFlOwAudioProcessorEditor::LaneChip::mouseDown (const juce::MouseEvent&)
+{
+    if (onClick)
+        onClick();
+}
+
+void LFlOwAudioProcessorEditor::LaneChip::setEditActive (bool active)
+{
+    if (editActive == active)
+        return;
+    editActive = active;
+    repaint();
 }
 
 // ---------------------------------------------------------------------- Editor
@@ -55,6 +74,14 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     auto& apvts = processorRef.getAPVTS();
 
     addAndMakeVisible (display);
+    display.setTooltip ("When a lane is in edit mode (its chip highlighted): click empty space "
+                         "to add a node, drag a node to move it, drag a segment vertically to "
+                         "bend it, double-click a node to delete it (2 minimum)");
+    display.onNodesEdited = [this] (std::vector<lflow::ShapeNode> nodes)
+    {
+        if (editLane >= 0)
+            processorRef.getShapeManager().setNodes (editLane, std::move (nodes));
+    };
 
     for (int i = 0; i < 3; ++i)
         buildLaneStrip (i);
@@ -87,6 +114,7 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     bypassAtt = std::make_unique<APVTS::ButtonAttachment> (apvts, lflow::pid::bypass, bypassButton);
 
     refreshEnablement();
+    refreshXoverHint();
 
     setSize (560, 640);
     startTimerHz (60);
@@ -110,21 +138,21 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     const auto& ids = laneIds[i];
 
     s.syncId = ids.sync;
-    s.waveformId = ids.waveform;
-    s.phaseId = ids.phase;
-    s.depthId = ids.depth;
+    const juce::String laneName = "Lane " + juce::String (i + 1);
 
     const auto colour = LFlOwLookAndFeel::laneColour (i);
     s.chip.setup (colour, i + 1);
+    s.chip.setTooltip (laneName + ": when this lane's waveform is Custom, click to enter "
+                        "or exit its breakpoint editor in the display above");
+    s.chip.onClick = [this, i] { onLaneChipClicked (i); };
     addAndMakeVisible (s.chip);
 
-    const juce::String laneName = "Lane " + juce::String (i + 1);
     s.nameLabel.setText (laneName, juce::dontSendNotification);
     s.nameLabel.setColour (juce::Label::textColourId, juce::Colour (colour));
     s.nameLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     addAndMakeVisible (s.nameLabel);
 
-    s.waveformBox.addItemList ({ "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold" }, 1);
+    s.waveformBox.addItemList ({ "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold", "Custom" }, 1);
     s.divisionBox.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 1);
     s.rhythmBox.addItemList   ({ "Straight", "Dotted", "Triplet" }, 1);
     s.destBox.addItemList     ({ "Volume", "Pan", "Low", "Mid", "High" }, 1);
@@ -218,7 +246,71 @@ void LFlOwAudioProcessorEditor::timerCallback()
         display.setLanePosition (i, processorRef.getLanePhase (i), processorRef.getLaneValue (i));
     }
 
+    if (editLane >= 0)
+    {
+        // Exit edit mode if the edited lane's waveform moved away from Custom (e.g. via
+        // automation or a preset load); otherwise keep the display's node list current in
+        // case it changed externally (undo, state reload) -- cheap, <=32 nodes.
+        const auto editWaveform = static_cast<lflow::Waveform> ((int) raw (laneIds[editLane].waveform));
+        if (editWaveform != lflow::Waveform::Custom)
+            setEditLane (-1);
+        else
+            display.setEditNodes (processorRef.getShapeManager().getNodes (editLane));
+    }
+
     refreshEnablement();
+    refreshXoverHint();
+}
+
+void LFlOwAudioProcessorEditor::setEditLane (int lane)
+{
+    if (lane == editLane)
+    {
+        lane = -1; // clicking the already-active lane's chip exits edit mode
+    }
+
+    editLane = lane;
+    for (int i = 0; i < 3; ++i)
+        laneStrips[(size_t) i].chip.setEditActive (i == editLane);
+
+    display.setEditLane (editLane);
+    if (editLane >= 0)
+        display.setEditNodes (processorRef.getShapeManager().getNodes (editLane));
+}
+
+void LFlOwAudioProcessorEditor::onLaneChipClicked (int lane)
+{
+    auto& apvts = processorRef.getAPVTS();
+    const auto waveform = static_cast<lflow::Waveform> (
+        (int) apvts.getRawParameterValue (laneIds[lane].waveform)->load());
+
+    if (waveform != lflow::Waveform::Custom)
+        return; // non-Custom lanes' chips are a no-op for edit mode
+
+    setEditLane (lane);
+}
+
+void LFlOwAudioProcessorEditor::refreshXoverHint()
+{
+    auto& apvts = processorRef.getAPVTS();
+    const float low  = apvts.getRawParameterValue (lflow::pid::xoverLow)->load();
+    const float high = apvts.getRawParameterValue (lflow::pid::xoverHigh)->load();
+    const bool clamped = high < low * 1.25f;
+
+    const int clampedNow = clamped ? 1 : 0;
+    if (clampedNow == xoverHiClampedState)
+        return;
+    xoverHiClampedState = clampedNow;
+
+    using C = LFlOwLookAndFeel::Colors;
+    const auto colour = juce::Colour (clamped ? C::onSurfaceVariant : C::onSurface);
+    xoverHighLabel.setColour (juce::Label::textColourId, colour);
+    xoverHighSlider.setColour (juce::Slider::textBoxTextColourId, colour);
+
+    juce::String tip = "Crossover between the Mid and High bands";
+    if (clamped)
+        tip += " (clamped by Low crossover)";
+    xoverHighSlider.setTooltip (tip);
 }
 
 void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)

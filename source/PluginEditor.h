@@ -23,17 +23,27 @@ public:
 private:
     using APVTS = juce::AudioProcessorValueTreeState;
 
-    // Small decorative chip painted in a lane's accent color with its lane number. Purely
-    // visual (not interactive), so it carries no tooltip.
-    class LaneChip : public juce::Component
+    // Chip painted in a lane's accent color with its lane number. Also the lane's edit-mode
+    // toggle: when that lane's waveform is Custom, clicking it enters/exits breakpoint editing
+    // for this lane in the display above (see onClick/setEditActive); for non-Custom lanes the
+    // click is a no-op (handled by the editor, not here).
+    class LaneChip : public juce::Component,
+                     public juce::SettableTooltipClient
     {
     public:
         void setup (juce::uint32 colourArgb, int laneNumber);
         void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+
+        // Highlights the chip while this lane is being edited.
+        void setEditActive (bool active);
+
+        std::function<void()> onClick;
 
     private:
         juce::uint32 colour { 0xffffffffu };
         int number { 1 };
+        bool editActive { false };
     };
 
     // One lane's worth of controls + attachments. Attachments always stay connected to their
@@ -58,9 +68,6 @@ private:
         std::unique_ptr<APVTS::SliderAttachment>   rateAtt, phaseAtt, depthAtt;
 
         const char* syncId { nullptr };
-        const char* waveformId { nullptr };
-        const char* phaseId { nullptr };
-        const char* depthId { nullptr };
     };
 
     LFlOwAudioProcessor& processorRef;
@@ -81,6 +88,14 @@ private:
     juce::TextButton bypassButton { "Bypass" };
     std::unique_ptr<APVTS::ButtonAttachment> bypassAtt;
 
+    // Which lane (0-2), if any, is currently being edited in the display; -1 = none. Owned
+    // here (not in LfoDisplay) since it also drives chip highlighting and the ShapeManager
+    // wiring; LfoDisplay just renders/hit-tests whatever setEditLane/setEditNodes give it.
+    int editLane { -1 };
+
+    // Cheap-compare cache so refreshXoverHint() only touches colours/tooltips on change.
+    int xoverHiClampedState { -1 }; // -1 = unknown (forces first apply), 0 = no, 1 = yes
+
     void buildLaneStrip (int laneIndex);
     void layoutLaneStrip (int laneIndex, juce::Rectangle<int> area);
     static void styleRotary (juce::Slider&, int textBoxWidth, int textBoxHeight);
@@ -89,6 +104,17 @@ private:
     // refreshSyncEnablement pattern: cheap to call every timer tick (setEnabled/setVisible
     // early-out when unchanged), catches automation and preset changes too.
     void refreshEnablement();
+
+    // Enters/exits/switches the display's edit mode for `lane` (-1 = exit). Syncs chip
+    // highlights and pushes the lane's current nodes into the display.
+    void setEditLane (int lane);
+
+    // Chip click handler: no-op unless that lane's waveform is Custom, else toggles edit mode.
+    void onLaneChipClicked (int lane);
+
+    // Folded Phase 3 item: tints the Xover Hi label/readout and extends its tooltip when the
+    // engine is clamping it against xoverLow*1.25 (see MultiLaneEngine/xover clamp behaviour).
+    void refreshXoverHint();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFlOwAudioProcessorEditor)
 };

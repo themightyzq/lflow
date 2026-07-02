@@ -55,7 +55,13 @@ Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.
 
 ## Platforms & distribution
 macOS (VST3 + AU), Windows (VST3), Linux (VST3). Standalone is a dev/test convenience.
-Versioning: semver in CMake `project(... VERSION ...)`. VCS: git.
+Versioning: semver in CMake `project(... VERSION ...)`.
+
+## Version control: Diversion (NOT git)
+This project uses **Diversion** (`dv` CLI at `~/.diversion/bin/dv`), not git. Do not run
+`git commit`/branch/PR flows for project work. Use Diversion's workflow (`dv status`,
+`dv commit`, etc.). (A stray local `.git` repo from early setup may exist; it is not the
+source of truth.)
 
 ## Steering layers
 Always-on rules → this file. Reusable playbooks → skills. Context-isolating/parallel work →

@@ -31,7 +31,7 @@ endif()
 juce_add_plugin(LFlOw
     PRODUCT_NAME "LFlOw"
     COMPANY_NAME "ZQ SFX"
-    BUNDLE_ID "com.zacharyquarles.lflow"
+    BUNDLE_ID "com.zqsfx.lflow"
     PLUGIN_MANUFACTURER_CODE Zqlr
     PLUGIN_CODE Lflw
     FORMATS ${LFLOW_FORMATS}

@@ -103,28 +103,42 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         }
     engine.setTransport (playing, bpm, ppq);
 
-    const int numChannels = buffer.getNumChannels();
+    const int numChannels = juce::jmin (buffer.getNumChannels(), (int) kMaxChannels);
     const int numSamples  = buffer.getNumSamples();
 
-    // Snapshot dry into the preallocated scratch buffer (sized in prepareToPlay; no
-    // allocation here) so the bypass crossfade below can blend wet/dry per sample.
-    for (int c = 0; c < numChannels; ++c)
-        dryScratch.copyFrom (c, 0, buffer, c, 0, numSamples);
-
-    // Engine always runs, even fully bypassed, so the UI display keeps animating.
+    // Process in chunks no larger than the preallocated scratch capacity, so a host that
+    // hands us a block bigger than prepareToPlay's samplesPerBlock (offline bounces do)
+    // can never overrun dryScratch. No allocation on this thread, ever.
     auto* const* channelData = buffer.getArrayOfWritePointers();
-    engine.process (channelData, numChannels, numSamples);
+    const int scratchCapacity = dryScratch.getNumSamples();
 
-    for (int n = 0; n < numSamples; ++n)
+    for (int offset = 0; offset < numSamples;)
     {
-        const float wetGain = bypassGain.getNextValue();
-        const float dryGain = 1.0f - wetGain;
+        const int chunk = juce::jmin (numSamples - offset, scratchCapacity);
+
+        // Snapshot dry (preallocated scratch; copyFrom never reallocates).
         for (int c = 0; c < numChannels; ++c)
+            dryScratch.copyFrom (c, 0, buffer, c, offset, chunk);
+
+        // Engine always runs, even fully bypassed, so the UI display keeps animating.
+        float* chunkChans[kMaxChannels];
+        for (int c = 0; c < numChannels; ++c)
+            chunkChans[c] = channelData[c] + offset;
+        engine.process (chunkChans, numChannels, chunk);
+
+        for (int n = 0; n < chunk; ++n)
         {
-            const float wet = channelData[c][n];
-            const float dry = dryScratch.getSample (c, n);
-            channelData[c][n] = wet * wetGain + dry * dryGain;
+            const float wetGain = bypassGain.getNextValue();
+            const float dryGain = 1.0f - wetGain;
+            for (int c = 0; c < numChannels; ++c)
+            {
+                const float wet = chunkChans[c][n];
+                const float dry = dryScratch.getSample (c, n);
+                chunkChans[c][n] = wet * wetGain + dry * dryGain;
+            }
         }
+
+        offset += chunk;
     }
 
     for (int i = 0; i < lflow::MultiLaneEngine::kNumLanes; ++i)

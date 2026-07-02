@@ -50,6 +50,10 @@ private:
     juce::AudioProcessorParameter* bypassParam { nullptr };
     lflow::MultiLaneEngine engine;
 
+    // Bus layout is restricted to mono/stereo (isBusesLayoutSupported); 8 is safe headroom
+    // for the chunked-processing channel-pointer array in processBlock.
+    static constexpr int kMaxChannels = 8;
+
     juce::SmoothedValue<float> bypassGain;
     juce::AudioBuffer<float> dryScratch;
 

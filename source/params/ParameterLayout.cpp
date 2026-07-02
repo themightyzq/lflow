@@ -14,7 +14,7 @@ using namespace juce;
 const StringArray waveformChoices { "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold", "Custom" };
 const StringArray divisionChoices { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" };
 const StringArray rhythmChoices   { "Straight", "Dotted", "Triplet" };
-const StringArray destChoices     { "Volume", "Pan", "Low", "Mid", "High" };
+const StringArray destChoices     { "Volume", "Pan", "Low", "Mid", "High", "Pitch" };
 
 // Adds the 8 lane-indexed parameters for one lane. destDefault/depthDefault vary per lane
 // per the Phase 2 defaults (lane1 Volume @ 50%; lane2 Pan @ 0%; lane3 Volume @ 0%).

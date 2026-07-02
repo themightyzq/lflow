@@ -156,7 +156,7 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.waveformBox.addItemList ({ "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold", "Custom" }, 1);
     s.divisionBox.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 1);
     s.rhythmBox.addItemList   ({ "Straight", "Dotted", "Triplet" }, 1);
-    s.destBox.addItemList     ({ "Volume", "Pan", "Low", "Mid", "High" }, 1);
+    s.destBox.addItemList     ({ "Volume", "Pan", "Low", "Mid", "High", "Pitch" }, 1);
     for (auto* b : { &s.waveformBox, &s.divisionBox, &s.rhythmBox, &s.destBox })
         addAndMakeVisible (b);
 
@@ -177,7 +177,7 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.divisionBox.setTooltip (laneName + ": note value per LFO cycle when Sync is on");
     s.rhythmBox.setTooltip   (laneName + ": straight, dotted, or triplet feel for the synced rate");
     s.phaseSlider.setTooltip (laneName + ": phase offset in degrees, relative to the other lanes");
-    s.destBox.setTooltip     (laneName + ": what this lane modulates, Volume, Pan, or a frequency band");
+    s.destBox.setTooltip     (laneName + ": what this lane modulates, Volume, Pan, a frequency band, or Pitch");
     s.depthSlider.setTooltip (laneName + ": how strongly this lane affects the signal");
 
     s.waveformAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids.waveform, s.waveformBox);

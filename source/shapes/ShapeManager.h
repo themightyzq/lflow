@@ -34,9 +34,10 @@ public:
     // thread only.
     std::vector<ShapeNode> getNodes (int lane) const;
 
-    // Replaces lane's node list in the ValueTree (which in turn triggers this ShapeManager's
-    // own listener callback, which bakes + publishes -- see class comment). Validation, in
-    // order:
+    // Replaces lane's node list in the ValueTree. The remove-all + re-append mutation is done
+    // with this ShapeManager's own listener temporarily detached (so the momentarily-empty
+    // intermediate state is never observed/baked/published -- see .cpp), followed by exactly
+    // one explicit rebake + publish of this lane. Validation, in order:
     //   - each node's x/y clamped to [0,1], curve clamped to [-1,1];
     //   - sorted by ascending x (stable, so caller-supplied order of same-x nodes is kept);
     //   - capped at kMaxShapeNodes -- if more are supplied, the LAST (kMaxShapeNodes) after
@@ -52,11 +53,14 @@ public:
     void setNodes (int lane, const std::vector<ShapeNode>& nodes);
 
 private:
-    // juce::ValueTree::Listener overrides. All fire on the message thread (the thread that
-    // mutates the tree -- setNodes(), or JUCE calling apvts.replaceState() during
-    // setStateInformation()). On any change touching our SHAPES subtree, every lane is
-    // rebaked + republished (see rebakeAndPublishAll(); cheap enough -- 3 x 256 floats -- to
-    // not bother diffing which lane actually changed).
+    // juce::ValueTree::Listener overrides. All fire on the message thread. Note that
+    // setNodes() and ensureShapesTree() detach this listener for the duration of their own
+    // tree mutations (so intermediate/partially-populated states are never rebaked -- each
+    // does exactly one explicit rebake instead once it's done); these callbacks now mainly
+    // observe changes made elsewhere (e.g. JUCE calling apvts.replaceState() during
+    // setStateInformation(), which fires valueTreeRedirected() below). On any change touching
+    // our SHAPES subtree, every lane is rebaked + republished (see rebakeAndPublishAll();
+    // cheap enough -- 3 x 256 floats -- to not bother diffing which lane actually changed).
     void valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property) override;
     void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override;
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int index) override;

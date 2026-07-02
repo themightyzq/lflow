@@ -34,8 +34,9 @@ ShapeManager::ShapeManager (juce::AudioProcessorValueTreeState& apvtsIn, ShapeTa
     // so we don't rebake on every knob tweak.
     apvts.state.addListener (this);
 
+    // ensureShapesTree() rebakes + republishes all lanes itself once the subtree is fully
+    // consistent (see its definition below), so no separate explicit call is needed here.
     ensureShapesTree();
-    rebakeAndPublishAll();
 }
 
 ShapeManager::~ShapeManager()
@@ -46,6 +47,15 @@ ShapeManager::~ShapeManager()
 void ShapeManager::ensureShapesTree()
 {
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+
+    // Suppress our own listener for the duration of the (possibly multi-step: create SHAPES,
+    // create up to 3 SHAPE children, append default NODE children) mutation below, so no
+    // intermediate/partially-populated state ever reaches rebakeAndPublish() -- same defect
+    // this guards against as in setNodes() (see its comment). One explicit rebake of every
+    // lane happens below, once the subtree is fully consistent -- this also covers the
+    // valueTreeRedirected() call path (state reload), so that override doesn't need its own
+    // explicit rebake.
+    apvts.state.removeListener (this);
 
     auto& root = apvts.state;
     auto shapes = root.getChildWithName (kShapesType);
@@ -80,6 +90,10 @@ void ShapeManager::ensureShapesTree()
     }
 
     shapesTree = shapes;
+
+    apvts.state.addListener (this);
+
+    rebakeAndPublishAll();
 }
 
 void ShapeManager::writeDefaultNodes (juce::ValueTree& shapeChild)
@@ -185,6 +199,14 @@ void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
         return;
     }
 
+    // Suppress our own listener across the remove-all + re-append below. Without this,
+    // removeAllChildren() alone would fire our valueTreeChildRemoved callback with the SHAPE
+    // temporarily empty, causing rebakeAndPublish() to publish an all-zero (silent) table to
+    // the live, audio-thread-visible ShapeTableBuffer for that lane -- audible as a glitch to
+    // silence if transport is running while a node list is edited (and setNodes() is called
+    // once per drag-frame by the editor). Re-enable the listener once the tree is back in a
+    // consistent state, then rebake + publish exactly once, explicitly.
+    apvts.state.removeListener (this);
     shape.removeAllChildren (nullptr);
     for (auto& n : nodes)
     {
@@ -194,13 +216,9 @@ void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
         nodeTree.setProperty (kCurveProp, (double) n.curve, nullptr);
         shape.appendChild (nodeTree, nullptr);
     }
+    apvts.state.addListener (this);
 
-    // removeAllChildren()/appendChild() above each fire our own valueTreeChild{Added,Removed}
-    // listener callback (isShapeType() lets them through), which rebakes + republishes this
-    // lane -- possibly several times over the course of this call. That's cheap (message
-    // thread, 256 floats) and keeps exactly ONE code path (the listener) responsible for
-    // baking, per the "on ANY shape-tree change" contract, so no explicit rebake is needed
-    // here.
+    rebakeAndPublish (lane);
 }
 
 void ShapeManager::rebakeAndPublish (int lane)
@@ -256,10 +274,10 @@ void ShapeManager::valueTreeRedirected (juce::ValueTree&)
 {
     // apvts.state has just been reassigned (setStateInformation -> apvts.replaceState()) to
     // point at a freshly-loaded tree. Re-locate (or create, if the loaded state predates
-    // Phase 4 / omits SHAPES) our subtree in the NEW tree, then rebake + republish every lane
-    // so the audio thread picks up the loaded shapes on the next processBlock().
+    // Phase 4 / omits SHAPES) our subtree in the NEW tree; ensureShapesTree() rebakes +
+    // republishes every lane itself once that's done, so the audio thread picks up the loaded
+    // shapes on the next processBlock() without a separate explicit call here.
     ensureShapesTree();
-    rebakeAndPublishAll();
 }
 
 } // namespace lflow

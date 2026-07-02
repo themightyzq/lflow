@@ -367,7 +367,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
-    g.drawText ("v0.4.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
+    g.drawText ("v0.5.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
                 juce::Justification::centredRight, false);
 }
 

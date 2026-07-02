@@ -162,6 +162,10 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
     // Engaged -> disengaged transition: clear crossover filter memory. A one-time
     // transient from this reset is acceptable/inaudible at gain parity (see the
     // Phase 3 design doc) -- far cheaper than keeping the split running dry.
+    // The ENGAGE edge (disengaged -> engaged) also carries a bounded one-time
+    // transient: dry path jumps to the LR4-reconstructed path with filters settling
+    // from zero state. Considered and accepted -- it fires only when a band lane's
+    // depth first goes >0 (not per LFO cycle, since gating below is depth-keyed).
     if (bandWasActive && ! bandActive)
         for (int c = 0; c < kNumBandChannels; ++c)
         {

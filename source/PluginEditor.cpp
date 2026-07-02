@@ -244,6 +244,17 @@ void LFlOwAudioProcessorEditor::timerCallback()
 
         display.setLane (i, waveform, phaseDeg / 360.0f, depth > 0.0f);
         display.setLanePosition (i, processorRef.getLanePhase (i), processorRef.getLaneValue (i));
+
+        // Non-edited Custom lanes must render their REAL drawn shape, not LfoCore's Sine
+        // fallback (LfoCore has no table for Waveform::Custom). Linked followers (i > 0
+        // while link is on) show lane 0's shape, matching the audio routing (followsLane1Motion
+        // above). setLaneNodes compares before invalidating, so this cheap ~3x/tick feed
+        // (<=32 nodes each) doesn't churn the cached path when nothing changed.
+        if (waveform == lflow::Waveform::Custom)
+        {
+            const int sourceLane = followsLane1Motion ? 0 : i;
+            display.setLaneNodes (i, processorRef.getShapeManager().getNodes (sourceLane));
+        }
     }
 
     if (editLane >= 0)

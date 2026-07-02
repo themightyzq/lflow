@@ -29,6 +29,14 @@ public:
     // phase actually fed into the waveform generator); value01 = the modulator value there.
     void setLanePosition (int lane, float phase01, float value01);
 
+    // Backs a NON-edited Custom lane's cached-path render with its real drawn shape instead
+    // of the Sine LfoCore fallback (LfoCore has no table for Waveform::Custom). Store +
+    // invalidate that lane's cached path only when the node list actually changed
+    // (compare-before-rebuild, same pattern as setLane's waveform/offset check). The edit
+    // lane keeps rendering from editNodes/editPath as before; this only affects lanes drawn
+    // via rebuildPathIfNeeded's "not the edit lane" branch.
+    void setLaneNodes (int lane, std::vector<lflow::ShapeNode> nodes);
+
     // -1 = no lane being edited. When >= 0, that lane's curve renders from editNodes (full
     // opacity + node handles) instead of its cached waveform path, other lanes dim harder, and
     // mouse input on this component edits the shape (see class comment).
@@ -59,6 +67,7 @@ private:
         bool active { false };
         float phase { 0.0f };
         float value { 0.0f };
+        std::vector<lflow::ShapeNode> nodes; // only meaningful when waveform == Custom
 
         // Cached unit-square path + the params it was built from (compare-before-rebuild).
         juce::Path path;

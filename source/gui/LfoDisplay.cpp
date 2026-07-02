@@ -1,6 +1,26 @@
 #include "LfoDisplay.h"
 #include "LFlOwLookAndFeel.h"
 
+namespace
+{
+// ShapeModel.h is deliberately JUCE-free (audio-thread safe), so the GUI does the
+// compare-before-rebuild check here, mirroring setLane's juce::approximatelyEqual use for
+// phaseOffset -- avoids both a raw float== warning and touching the audio-thread header.
+bool laneNodesEqual (const std::vector<lflow::ShapeNode>& a, const std::vector<lflow::ShapeNode>& b)
+{
+    if (a.size() != b.size())
+        return false;
+
+    for (size_t i = 0; i < a.size(); ++i)
+        if (! juce::approximatelyEqual (a[i].x, b[i].x)
+            || ! juce::approximatelyEqual (a[i].y, b[i].y)
+            || ! juce::approximatelyEqual (a[i].curve, b[i].curve))
+            return false;
+
+    return true;
+}
+} // namespace
+
 void LfoDisplay::setLane (int lane, lflow::Waveform waveform, float phaseOffset01, bool active)
 {
     if (lane < 0 || lane >= kNumLanes)
@@ -24,6 +44,20 @@ void LfoDisplay::setLanePosition (int lane, float phase01, float value01)
     auto& l = lanes[(size_t) lane];
     l.phase = phase01;
     l.value = value01;
+    repaint();
+}
+
+void LfoDisplay::setLaneNodes (int lane, std::vector<lflow::ShapeNode> nodes)
+{
+    if (lane < 0 || lane >= kNumLanes)
+        return;
+
+    auto& l = lanes[(size_t) lane];
+    if (laneNodesEqual (nodes, l.nodes))
+        return; // no real change -- avoid rebuild churn from the ~3x/tick feed in the editor
+
+    l.nodes = std::move (nodes);
+    l.pathValid = false; // force rebuildPathIfNeeded to re-evaluate this lane next paint
     repaint();
 }
 
@@ -82,9 +116,21 @@ void LfoDisplay::rebuildPathIfNeeded (LaneState& lane)
         && juce::approximatelyEqual (lane.pathPhaseOffset, lane.phaseOffset))
         return;
 
+    // A Custom lane with a real drawn shape renders straight from its node model (same
+    // piecewise power-curve baked table used for edit-mode rendering) rather than LfoCore --
+    // LfoCore has no table for Waveform::Custom and would otherwise silently fall back to
+    // Sine, which is exactly the bug this lane-nodes plumbing exists to fix.
+    const bool useNodeModel = (lane.waveform == lflow::Waveform::Custom && lane.nodes.size() >= 2);
+
+    float table[lflow::kShapeTableSize] {};
     lflow::LfoCore core;
-    core.setWaveform (lane.waveform);
-    core.reset (1u);
+    if (useNodeModel)
+        lflow::bakeShapeTable (lane.nodes.data(), (int) lane.nodes.size(), table, lflow::kShapeTableSize);
+    else
+    {
+        core.setWaveform (lane.waveform);
+        core.reset (1u);
+    }
 
     juce::Path p;
     constexpr int N = 128;
@@ -93,7 +139,9 @@ void LfoDisplay::rebuildPathIfNeeded (LaneState& lane)
         const float x = (float) i / (float) (N - 1);
         float ph = x + lane.phaseOffset;
         ph -= std::floor (ph);
-        const float v = core.valueAt (ph); // curve(x) = valueAt(frac(x + offset))
+        const float v = useNodeModel
+            ? lflow::shapeTableValue (table, lflow::kShapeTableSize, ph)
+            : core.valueAt (ph); // curve(x) = valueAt(frac(x + offset))
         const float y = 1.0f - v;          // unit square: y grows downward, value grows upward
         if (i == 0) p.startNewSubPath (x, y);
         else        p.lineTo (x, y);

@@ -112,6 +112,13 @@ private:
     // Chip click handler: no-op unless that lane's waveform is Custom, else toggles edit mode.
     void onLaneChipClicked (int lane);
 
+    // Resolves lane `lane`'s EFFECTIVE waveform: when Link is on, lanes 1-2 follow lane 0's
+    // waveform (the processor routes lane 0's table to followers), so a follower's own raw
+    // waveform is not what's actually playing. Returns lane 0's raw waveform for a linked
+    // follower, otherwise the lane's own raw waveform. Shared by the chip-click gate and the
+    // edit-mode watchdog so neither can be fooled by a follower's hidden Custom shape.
+    lflow::Waveform effectiveWaveform (int lane) const;
+
     // Folded Phase 3 item: tints the Xover Hi label/readout and extends its tooltip when the
     // engine is clamping it against xoverLow*1.25 (see MultiLaneEngine/xover clamp behaviour).
     void refreshXoverHint();

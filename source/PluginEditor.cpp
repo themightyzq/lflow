@@ -39,21 +39,22 @@ void LFlOwAudioProcessorEditor::LaneChip::paint (juce::Graphics& g)
 {
     using C = LFlOwLookAndFeel::Colors;
     auto r = getLocalBounds().toFloat();
+    const float alpha = isEnabled() ? 1.0f : 0.35f; // grey out when Link disables this chip
     if (editActive)
     {
-        g.setColour (juce::Colour (C::onSurface));
+        g.setColour (juce::Colour (C::onSurface).withAlpha (alpha));
         g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 2.0f);
     }
-    g.setColour (juce::Colour (colour));
+    g.setColour (juce::Colour (colour).withAlpha (alpha));
     g.fillRoundedRectangle (r.reduced (editActive ? 2.0f : 0.0f), 4.0f);
-    g.setColour (juce::Colour (C::background));
+    g.setColour (juce::Colour (C::background).withAlpha (alpha));
     g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     g.drawText (juce::String (number), getLocalBounds(), juce::Justification::centred, false);
 }
 
 void LFlOwAudioProcessorEditor::LaneChip::mouseDown (const juce::MouseEvent&)
 {
-    if (onClick)
+    if (onClick && isEnabled())
         onClick();
 }
 
@@ -209,6 +210,10 @@ void LFlOwAudioProcessorEditor::refreshEnablement()
 
         s.waveformBox.setEnabled (motionEnabled);
         s.syncButton.setEnabled (motionEnabled);
+        // Mirrors waveformBox/syncButton: a linked follower's chip is a dead affordance (its
+        // own edit mode can never open, see onLaneChipClicked/effectiveWaveform), so grey it
+        // out visibly instead of leaving it clickable-but-inert.
+        s.chip.setEnabled (motionEnabled);
 
         s.rateSlider.setEnabled (motionEnabled && ! effectiveSync);
         s.rateSlider.setVisible (! effectiveSync);
@@ -229,15 +234,12 @@ void LFlOwAudioProcessorEditor::timerCallback()
     auto raw = [&apvts] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
 
     const bool link = raw (lflow::pid::link) > 0.5f;
-    const auto lane1Waveform = static_cast<lflow::Waveform> ((int) raw (laneIds[0].waveform));
 
     for (int i = 0; i < 3; ++i)
     {
         const auto& ids = laneIds[i];
         const bool followsLane1Motion = (i != 0) && link;
-        const auto waveform = followsLane1Motion
-            ? lane1Waveform
-            : static_cast<lflow::Waveform> ((int) raw (ids.waveform));
+        const auto waveform = effectiveWaveform (i);
 
         const float phaseDeg = raw (ids.phase); // phase offset is never linked
         const float depth = raw (ids.depth);
@@ -249,8 +251,10 @@ void LFlOwAudioProcessorEditor::timerCallback()
         // fallback (LfoCore has no table for Waveform::Custom). Linked followers (i > 0
         // while link is on) show lane 0's shape, matching the audio routing (followsLane1Motion
         // above). setLaneNodes compares before invalidating, so this cheap ~3x/tick feed
-        // (<=32 nodes each) doesn't churn the cached path when nothing changed.
-        if (waveform == lflow::Waveform::Custom)
+        // (<=32 nodes each) doesn't churn the cached path when nothing changed. The edit lane
+        // is fed separately via setEditNodes below -- skip it here so the two rendering paths
+        // never fight over the same lane's node list.
+        if (waveform == lflow::Waveform::Custom && i != editLane)
         {
             const int sourceLane = followsLane1Motion ? 0 : i;
             display.setLaneNodes (i, processorRef.getShapeManager().getNodes (sourceLane));
@@ -259,11 +263,13 @@ void LFlOwAudioProcessorEditor::timerCallback()
 
     if (editLane >= 0)
     {
-        // Exit edit mode if the edited lane's waveform moved away from Custom (e.g. via
-        // automation or a preset load); otherwise keep the display's node list current in
-        // case it changed externally (undo, state reload) -- cheap, <=32 nodes.
-        const auto editWaveform = static_cast<lflow::Waveform> ((int) raw (laneIds[editLane].waveform));
-        if (editWaveform != lflow::Waveform::Custom)
+        // Exit edit mode if the edited lane is now a linked follower (its own Custom shape,
+        // if any, is no longer what's playing -- lane 0's is) or its effective waveform moved
+        // away from Custom (e.g. via automation or a preset load); otherwise keep the display's
+        // node list current in case it changed externally (undo, state reload) -- cheap,
+        // <=32 nodes, and setEditNodes compares before rebaking/repainting.
+        const bool editLaneIsFollower = (editLane != 0) && link;
+        if (editLaneIsFollower || effectiveWaveform (editLane) != lflow::Waveform::Custom)
             setEditLane (-1);
         else
             display.setEditNodes (processorRef.getShapeManager().getNodes (editLane));
@@ -271,6 +277,17 @@ void LFlOwAudioProcessorEditor::timerCallback()
 
     refreshEnablement();
     refreshXoverHint();
+}
+
+lflow::Waveform LFlOwAudioProcessorEditor::effectiveWaveform (int lane) const
+{
+    auto& apvts = processorRef.getAPVTS();
+    auto raw = [&apvts] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+
+    const bool link = raw (lflow::pid::link) > 0.5f;
+    const bool followsLane1Motion = (lane != 0) && link;
+    const char* waveformId = followsLane1Motion ? laneIds[0].waveform : laneIds[lane].waveform;
+    return static_cast<lflow::Waveform> ((int) raw (waveformId));
 }
 
 void LFlOwAudioProcessorEditor::setEditLane (int lane)
@@ -292,10 +309,16 @@ void LFlOwAudioProcessorEditor::setEditLane (int lane)
 void LFlOwAudioProcessorEditor::onLaneChipClicked (int lane)
 {
     auto& apvts = processorRef.getAPVTS();
-    const auto waveform = static_cast<lflow::Waveform> (
-        (int) apvts.getRawParameterValue (laneIds[lane].waveform)->load());
+    const bool link = apvts.getRawParameterValue (lflow::pid::link)->load() > 0.5f;
 
-    if (waveform != lflow::Waveform::Custom)
+    // Linked followers (lanes 2-3 while Link is on) play lane 0's waveform regardless of their
+    // own -- entering edit mode would silently edit the follower's own hidden shape while the
+    // display/audio keep showing/playing lane 0's, which is exactly the confusion this gate
+    // exists to prevent. Their chips are disabled in refreshEnablement() too.
+    if (link && lane != 0)
+        return;
+
+    if (effectiveWaveform (lane) != lflow::Waveform::Custom)
         return; // non-Custom lanes' chips are a no-op for edit mode
 
     setEditLane (lane);

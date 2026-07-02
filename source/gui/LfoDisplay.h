@@ -42,9 +42,12 @@ public:
     // mouse input on this component edits the shape (see class comment).
     void setEditLane (int laneOrMinus1);
 
-    // Replaces the node list backing the edited lane's render/hit-test. Rebakes a local
-    // ShapeModel table (no JUCE/audio-thread involvement) so the curve reflects edits
-    // immediately. Nodes are expected pre-sorted by x (ShapeManager's own contract).
+    // Replaces the node list backing the edited lane's render/hit-test. Compares against the
+    // current list first (same laneNodesEqual helper as setLaneNodes) and only rebakes the
+    // local ShapeModel table + invalidates editPath when the nodes actually changed -- the
+    // editor's timerCallback feeds this unconditionally at 60Hz, so this guard is what keeps
+    // an unchanged edit lane from rebaking/repainting every tick. Nodes are expected pre-sorted
+    // by x (ShapeManager's own contract).
     void setEditNodes (const std::vector<lflow::ShapeNode>& nodes);
 
     // Fired once per committed mouse-edit (add/move/bend/delete) with the full updated node

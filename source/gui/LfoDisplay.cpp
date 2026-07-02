@@ -75,6 +75,9 @@ void LfoDisplay::setEditLane (int laneOrMinus1)
 
 void LfoDisplay::setEditNodes (const std::vector<lflow::ShapeNode>& nodes)
 {
+    if (laneNodesEqual (nodes, editNodes))
+        return; // no real change -- avoid rebake/repaint churn from the 60Hz feed in the editor
+
     editNodes = nodes;
     rebakeEditTable();
     editPathDirty = true;

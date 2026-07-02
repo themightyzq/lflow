@@ -42,9 +42,11 @@ void LFlOwAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     engine.prepare (sampleRate, samplesPerBlock);
 
-    // ~30 ms bypass crossfade ramp, click-free. setSize here only — never in processBlock.
+    // ~30 ms bypass crossfade ramp, click-free. Seed from the ACTUAL bypass state so a
+    // session loaded (or re-prepared) while bypassed doesn't leak 30 ms of wet signal.
+    const bool bypassedNow = apvts.getRawParameterValue (lflow::pid::bypass)->load() > 0.5f;
     bypassGain.reset (sampleRate, 0.03);
-    bypassGain.setCurrentAndTargetValue (1.0f);
+    bypassGain.setCurrentAndTargetValue (bypassedNow ? 0.0f : 1.0f);
 
     const int scratchChannels = juce::jmax (getTotalNumInputChannels(), getTotalNumOutputChannels(), 2);
     dryScratch.setSize (scratchChannels, samplesPerBlock);

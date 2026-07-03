@@ -147,6 +147,27 @@ private:
     // tracks canUndo()/canRedo(), refreshed each timerCallback tick.
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
 
+    // Phase 7 Task 4 (UX #2): slim preset bar directly under the header line --
+    // [<] [name] [>] [v] ... [A] [B] [Copy]. ASCII only. All state (current name, dirty
+    // baseline, A/B slots) lives in the processor's PresetManager; this row is a dumb view
+    // over it, refreshed at a throttled rate from timerCallback() (refreshPresetBar). The
+    // A/B pills are TextButtons whose toggle state is driven manually from the manager's
+    // active slot (setClickingTogglesState(false), like the lane Edit pills) with
+    // buttonOnColourId = primary, matching Bypass's ON tint.
+    juce::TextButton presetPrevButton { "<" }, presetNextButton { ">" }, presetMenuButton { "v" };
+    juce::Label presetNameLabel;
+    juce::TextButton slotAButton { "A" }, slotBButton { "B" }, copySlotButton { "Copy" };
+
+    // Save As dialog, JUCE 8 non-modal pattern (enterModalState + ModalCallbackFunction, no
+    // runModalLoop) -- kept as a member so it outlives the ctor scope; reused per invocation.
+    std::unique_ptr<juce::AlertWindow> saveDialog;
+
+    // Throttle counter for refreshPresetBar(): the dirty check deep-compares the state tree
+    // (see PresetManager::isDirty()), which is cheap but not 60-Hz-free-cheap, so the bar
+    // refreshes every kPresetBarPollTicks timer ticks (~6 Hz) instead of every tick.
+    static constexpr int kPresetBarPollTicks = 10;
+    int presetBarPollCounter { 0 };
+
     // Which lane (0-2), if any, is currently being edited in the display; -1 = none. Owned
     // here (not in LfoDisplay) since it also drives chip highlighting and the ShapeManager
     // wiring; LfoDisplay just renders/hit-tests whatever setEditLane/setEditNodes give it.
@@ -166,6 +187,16 @@ private:
     int xoverHiClampedState { -1 }; // -1 = unknown (forces first apply)
 
     void buildLaneStrip (int laneIndex);
+
+    // Phase 7 Task 4 (UX #2) preset bar plumbing. buildPresetBar() = ctor setup;
+    // refreshPresetBar() syncs name label ("<name>" + "*" when edited since load), A/B pill
+    // highlight -- called from the ctor, after every preset-bar action, and (throttled) from
+    // timerCallback(). showPresetMenu() opens the async popup (factory list, user presets,
+    // Save As..., Open presets folder); startSaveAsDialog() runs the non-modal name prompt.
+    void buildPresetBar();
+    void refreshPresetBar();
+    void showPresetMenu();
+    void startSaveAsDialog();
 
     // Computes laneGrid's column x-positions/widths from the available row bounds (spec
     // minimums as floors; the rate slot absorbs any extra width as the window widens). Called

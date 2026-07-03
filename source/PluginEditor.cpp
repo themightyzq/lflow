@@ -149,8 +149,12 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     addAndMakeVisible (undoButton);
     addAndMakeVisible (redoButton);
 
+    // Phase 7 Task 4 (UX #2): preset bar row under the header.
+    buildPresetBar();
+
     refreshEnablement();
     refreshXoverHint();
+    refreshPresetBar();
 
     setResizable (true, true);
     setResizeLimits (620, 560, 1000, 900);
@@ -193,6 +197,155 @@ bool LFlOwAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     }
 
     return false;
+}
+
+// ---------------------------------------------------------------- Preset bar (P7 T4, UX #2)
+
+void LFlOwAudioProcessorEditor::buildPresetBar()
+{
+    presetPrevButton.setTooltip ("Load the previous preset (factory list first, then your saved presets)");
+    presetNextButton.setTooltip ("Load the next preset (factory list first, then your saved presets)");
+    presetMenuButton.setTooltip ("Preset menu: factory presets, your saved presets, Save As, open presets folder");
+    presetPrevButton.onClick = [this] { processorRef.getPresetManager().loadNeighbour (-1); refreshPresetBar(); };
+    presetNextButton.onClick = [this] { processorRef.getPresetManager().loadNeighbour (+1); refreshPresetBar(); };
+    presetMenuButton.onClick = [this] { showPresetMenu(); };
+    addAndMakeVisible (presetPrevButton);
+    addAndMakeVisible (presetNextButton);
+    addAndMakeVisible (presetMenuButton);
+
+    presetNameLabel.setJustificationType (juce::Justification::centred);
+    presetNameLabel.setColour (juce::Label::textColourId, juce::Colour (LFlOwLookAndFeel::Colors::onSurface));
+    presetNameLabel.setTooltip ("Current preset -- a trailing * means settings have changed since it was loaded");
+    addAndMakeVisible (presetNameLabel);
+
+    // A/B pills: toggle look driven manually from PresetManager::getActiveSlot() (same
+    // pattern as the lane Edit pills -- the click acts on the manager, refreshPresetBar()
+    // reflects the result). ON tint matches Bypass (buttonOnColourId = primary).
+    for (auto* b : { &slotAButton, &slotBButton })
+    {
+        b->setClickingTogglesState (false);
+        b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (LFlOwLookAndFeel::Colors::primary));
+        addAndMakeVisible (b);
+    }
+    slotAButton.setTooltip ("Switch to compare slot A -- the current settings are kept in slot B "
+                             "so you can flip between the two (one undo step)");
+    slotBButton.setTooltip ("Switch to compare slot B -- the current settings are kept in slot A "
+                             "so you can flip between the two (one undo step)");
+    slotAButton.onClick = [this] { processorRef.getPresetManager().switchToSlot (0); refreshPresetBar(); };
+    slotBButton.onClick = [this] { processorRef.getPresetManager().switchToSlot (1); refreshPresetBar(); };
+
+    copySlotButton.setTooltip ("Copy the current settings into the inactive compare slot");
+    copySlotButton.onClick = [this] { processorRef.getPresetManager().copyActiveToOther(); };
+    addAndMakeVisible (copySlotButton);
+}
+
+void LFlOwAudioProcessorEditor::refreshPresetBar()
+{
+    auto& manager = processorRef.getPresetManager();
+
+    // setText()/setToggleState() early-out when unchanged, so calling this from the throttled
+    // timer path never repaints a quiescent bar.
+    const auto text = manager.getCurrentPresetName() + (manager.isDirty() ? "*" : "");
+    presetNameLabel.setText (text, juce::dontSendNotification);
+
+    const int active = manager.getActiveSlot();
+    slotAButton.setToggleState (active == 0, juce::dontSendNotification);
+    slotBButton.setToggleState (active == 1, juce::dontSendNotification);
+}
+
+void LFlOwAudioProcessorEditor::showPresetMenu()
+{
+    auto& manager = processorRef.getPresetManager();
+    const auto current = manager.getCurrentPresetName();
+
+    // Item ids: 1..N factory, 1000+i user files (the file Array is captured by the callback
+    // so indices stay valid even if the folder changes while the menu is open), 2000 Save As,
+    // 2001 Open folder.
+    juce::PopupMenu menu;
+    const int numFactory = lflow::PresetManager::getNumFactoryPresets();
+    for (int i = 0; i < numFactory; ++i)
+    {
+        const auto name = lflow::PresetManager::getFactoryPresetName (i);
+        menu.addItem (1 + i, name, true, name == current);
+    }
+
+    const auto userFiles = lflow::PresetManager::getUserPresetFiles();
+    if (! userFiles.isEmpty())
+    {
+        menu.addSeparator();
+        for (int i = 0; i < userFiles.size(); ++i)
+        {
+            const auto name = userFiles[i].getFileNameWithoutExtension();
+            menu.addItem (1000 + i, name, true, name == current);
+        }
+    }
+
+    menu.addSeparator();
+    menu.addItem (2000, "Save As...");
+    menu.addItem (2001, "Open presets folder");
+
+    // Async, per JUCE 8 non-modal house rules. SafePointer: the host can destroy the editor
+    // while the menu is open (window closed); the callback then simply does nothing.
+    juce::Component::SafePointer<LFlOwAudioProcessorEditor> safeThis (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetMenuButton),
+        [safeThis, userFiles] (int result)
+        {
+            if (safeThis == nullptr || result == 0)
+                return;
+
+            auto& mgr = safeThis->processorRef.getPresetManager();
+            if (result >= 1 && result < 1000)
+                mgr.loadFactory (result - 1);
+            else if (result >= 1000 && result < 2000)
+                mgr.loadUserPresetFile (userFiles[result - 1000]);
+            else if (result == 2000)
+            {
+                safeThis->startSaveAsDialog();
+                return; // bar refreshes when the dialog completes
+            }
+            else if (result == 2001)
+                lflow::PresetManager::getUserPresetDir().revealToUser();
+
+            safeThis->refreshPresetBar();
+        });
+}
+
+void LFlOwAudioProcessorEditor::startSaveAsDialog()
+{
+    // Non-modal (JUCE 8): enterModalState + ModalCallbackFunction, never runModalLoop. The
+    // window is owned by the `saveDialog` member and destroyed in the completion callback
+    // (moved out first so a re-entrant Save As can't double-free).
+    saveDialog = std::make_unique<juce::AlertWindow> ("Save preset", "Preset name:",
+                                                       juce::MessageBoxIconType::NoIcon, this);
+    saveDialog->setLookAndFeel (&lookAndFeel);
+
+    const auto current = processorRef.getPresetManager().getCurrentPresetName();
+    saveDialog->addTextEditor ("name", current == "Init" ? juce::String ("My Preset") : current);
+    saveDialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    saveDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    juce::Component::SafePointer<LFlOwAudioProcessorEditor> safeThis (this);
+    saveDialog->enterModalState (true,
+        juce::ModalCallbackFunction::create ([safeThis] (int result)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto dialog = std::move (safeThis->saveDialog);
+            if (dialog == nullptr)
+                return;
+            dialog->setLookAndFeel (nullptr);
+            dialog->setVisible (false);
+
+            if (result == 1)
+            {
+                const auto name = dialog->getTextEditorContents ("name").trim();
+                if (name.isNotEmpty())
+                    safeThis->processorRef.getPresetManager().saveUserPreset (name);
+            }
+            safeThis->refreshPresetBar();
+        }),
+        false); // deleteWhenDismissed=false: the member unique_ptr owns the window
 }
 
 void LFlOwAudioProcessorEditor::styleRotary (juce::Slider& s, int textBoxWidth, int textBoxHeight)
@@ -390,6 +543,15 @@ void LFlOwAudioProcessorEditor::timerCallback()
     undoButton.setEnabled (um.canUndo());
     redoButton.setEnabled (um.canRedo());
 
+    // Phase 7 Task 4 (UX #2): throttled preset-bar refresh -- the dirty check deep-compares
+    // the state tree (see PresetManager::isDirty()), so it runs at ~6 Hz, not 60. Catches
+    // edits from any source: knobs, automation, undo/redo, shape drawing.
+    if (++presetBarPollCounter >= kPresetBarPollTicks)
+    {
+        presetBarPollCounter = 0;
+        refreshPresetBar();
+    }
+
     refreshEnablement();
     refreshXoverHint();
 }
@@ -578,6 +740,29 @@ void LFlOwAudioProcessorEditor::resized()
     redoButton.setBounds (headerLine.removeFromRight (44).withSizeKeepingCentre (44, 22));
     headerLine.removeFromRight (4);
     undoButton.setBounds (headerLine.removeFromRight (44).withSizeKeepingCentre (44, 22));
+
+    area.removeFromTop (4);
+
+    // Phase 7 Task 4 (UX #2): preset bar row -- [<] [name] [>] [v] ... [A] [B] [Copy]. All
+    // widths fixed except the name label, which absorbs the slack: at the 620px floor that is
+    // 620 - 24 (margins) - 88 (prev/next/menu + gaps) - 12 (group gap) - 104 (A/B/Copy) =
+    // 392px of name space -- no truncation risk for any factory or sane user preset name.
+    auto presetBar = area.removeFromTop (24);
+    auto abGroup = presetBar.removeFromRight (24 + 4 + 24 + 4 + 48);
+    slotAButton.setBounds (abGroup.removeFromLeft (24));
+    abGroup.removeFromLeft (4);
+    slotBButton.setBounds (abGroup.removeFromLeft (24));
+    abGroup.removeFromLeft (4);
+    copySlotButton.setBounds (abGroup);
+    presetBar.removeFromRight (12);
+
+    presetPrevButton.setBounds (presetBar.removeFromLeft (24));
+    presetBar.removeFromLeft (4);
+    presetMenuButton.setBounds (presetBar.removeFromRight (24));
+    presetBar.removeFromRight (4);
+    presetNextButton.setBounds (presetBar.removeFromRight (24));
+    presetBar.removeFromRight (4);
+    presetNameLabel.setBounds (presetBar);
 
     area.removeFromTop (4);
 

@@ -3,6 +3,7 @@
 #include "dsp/MultiLaneEngine.h"
 #include "dsp/TripleBuffer.h"
 #include "shapes/ShapeManager.h"
+#include "presets/PresetManager.h"
 #include <atomic>
 #include <memory>
 
@@ -89,6 +90,12 @@ public:
     // else UI/undo related here.
     juce::UndoManager& getUndoManager() noexcept { return undoManager; }
 
+    // Phase 7 Task 4 (UX #2): factory/user presets + A/B compare slots. Owned by the
+    // processor (not the editor) so the current preset name, dirty baseline, and both A/B
+    // slots survive the editor being closed and reopened. Message-thread only, like the
+    // ShapeManager/UndoManager it drives -- see PresetManager.h.
+    lflow::PresetManager& getPresetManager() noexcept { return *presetManager; }
+
     float getLanePhase (int lane) const noexcept
     {
         return (lane >= 0 && lane < lflow::MultiLaneEngine::kNumLanes) ? lanePhaseAtomic[(size_t) lane].load() : 0.0f;
@@ -124,6 +131,14 @@ private:
     // SHAPES ValueTree subtree and bakes+publishes into shapeBuffers on any shape change
     // (including state reloads). Message-thread only -- see ShapeManager.h.
     std::unique_ptr<lflow::ShapeManager> shapeManager;
+
+    // Phase 7 Task 4 (UX #2). Constructed AFTER shapeManager, deliberately: PresetManager's
+    // ctor registers a ValueTree listener on apvts.state BEHIND ShapeManager's, so on a host
+    // state reload (valueTreeRedirected) ShapeManager re-ensures the SHAPES subtree BEFORE
+    // PresetManager re-arms its dirty baseline (see PresetManager::RedirectWatcher). Destroyed
+    // before shapeManager/apvts/undoManager (reverse declaration order), while all three are
+    // still alive -- it holds references to them.
+    std::unique_ptr<lflow::PresetManager> presetManager;
 
     // Bus layout is restricted to mono/stereo (isBusesLayoutSupported); 8 is safe headroom
     // for the chunked-processing channel-pointer array in processBlock.

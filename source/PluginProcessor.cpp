@@ -86,6 +86,10 @@ LFlOwAudioProcessor::LFlOwAudioProcessor()
     // Constructed AFTER apvts: ensures/loads the SHAPES ValueTree subtree and does the
     // initial bake+publish for all 3 lanes (shapeBuffers already default-constructed above).
     shapeManager = std::make_unique<lflow::ShapeManager> (apvts, shapeBuffers);
+
+    // Phase 7 Task 4 (UX #2): constructed AFTER shapeManager -- listener registration order on
+    // apvts.state matters for host state reloads (see the member's doc comment in the header).
+    presetManager = std::make_unique<lflow::PresetManager> (apvts, *shapeManager, undoManager);
 }
 
 void LFlOwAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)

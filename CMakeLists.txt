@@ -51,9 +51,10 @@ target_sources(LFlOw PRIVATE
     source/params/ParameterLayout.cpp
     source/gui/LFlOwLookAndFeel.cpp
     source/gui/LfoDisplay.cpp
-    source/shapes/ShapeManager.cpp)
+    source/shapes/ShapeManager.cpp
+    source/presets/PresetManager.cpp)
 
-target_include_directories(LFlOw PRIVATE source source/params source/dsp source/gui source/shapes)
+target_include_directories(LFlOw PRIVATE source source/params source/dsp source/gui source/shapes source/presets)
 
 target_compile_definitions(LFlOw PUBLIC
     JUCE_WEB_BROWSER=0

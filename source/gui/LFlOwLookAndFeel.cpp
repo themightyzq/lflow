@@ -135,6 +135,41 @@ void LFlOwLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& 
     g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
 }
 
+// ---------------------------------------------------------------------- Linear sliders (Rate)
+
+void LFlOwLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height,
+                                         float sliderPos, float /*minSliderPos*/, float /*maxSliderPos*/,
+                                         const juce::Slider::SliderStyle /*style*/, juce::Slider& slider)
+{
+    const float alphaMul = slider.isEnabled() ? 1.0f : disabledAlpha;
+    const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat();
+
+    constexpr float trackH = 4.0f;
+    const auto trackY = bounds.getCentreY() - trackH * 0.5f;
+    const juce::Rectangle<float> track (bounds.getX(), trackY, bounds.getWidth(), trackH);
+
+    g.setColour (juce::Colour (Colors::outline).withAlpha (alphaMul));
+    g.fillRoundedRectangle (track, trackH * 0.5f);
+
+    // Filled portion, in the control's own accent (lane colour — see buildLaneStrip).
+    const auto fillColour = slider.findColour (juce::Slider::rotarySliderFillColourId);
+    const float fillW = juce::jlimit (0.0f, bounds.getWidth(), sliderPos - bounds.getX());
+    if (fillW > 0.0f)
+    {
+        const juce::Rectangle<float> fill (bounds.getX(), trackY, fillW, trackH);
+        g.setColour (fillColour.withAlpha (alphaMul));
+        g.fillRoundedRectangle (fill, trackH * 0.5f);
+    }
+
+    // Slim rounded-capsule thumb — replaces the stock white ball.
+    constexpr float thumbW = 6.0f;
+    constexpr float thumbH = 14.0f;
+    const juce::Rectangle<float> thumb (sliderPos - thumbW * 0.5f, bounds.getCentreY() - thumbH * 0.5f,
+                                         thumbW, thumbH);
+    g.setColour (juce::Colour (Colors::onSurface).withAlpha (alphaMul));
+    g.fillRoundedRectangle (thumb, thumbW * 0.5f);
+}
+
 // ---------------------------------------------------------------------- Labels (readouts)
 
 void LFlOwLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& label)

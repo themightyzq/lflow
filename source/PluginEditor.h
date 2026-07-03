@@ -70,6 +70,27 @@ private:
         const char* syncId { nullptr };
     };
 
+    // A single column x-position/width per lane-grid column, shared by the painted column-
+    // header row (paint()) and every lane strip's control layout (layoutLaneStrip()) so the
+    // two can never drift out of alignment ("no duplicated magic x's" per Phase 6 Task 2).
+    // Only x/width are meaningful here — each strip supplies its own row's y/height.
+    struct ColumnSlot { int x = 0, w = 0; };
+    struct LaneGridLayout
+    {
+        juce::Rectangle<int> headerRow; // the painted "WAVE SYNC RATE..." row's bounds
+        ColumnSlot chip, name, wave, sync, rate, phase, dest, depth;
+    };
+    LaneGridLayout laneGrid;
+
+    // Divider + "BANDS" micro-label painted over the global row's crossover group (finding
+    // #8's grouping), computed in resized() and painted in paint().
+    struct GlobalRowLayout
+    {
+        juce::Rectangle<int> dividerLine;
+        juce::Rectangle<int> bandsLabel;
+    };
+    GlobalRowLayout globalGrid;
+
     LFlOwAudioProcessor& processorRef;
     LFlOwLookAndFeel lookAndFeel;
     juce::TooltipWindow tooltipWindow { this, 500 };
@@ -97,7 +118,13 @@ private:
     int xoverHiClampedState { -1 }; // -1 = unknown (forces first apply), 0 = no, 1 = yes
 
     void buildLaneStrip (int laneIndex);
-    void layoutLaneStrip (int laneIndex, juce::Rectangle<int> area);
+
+    // Computes laneGrid's column x-positions/widths from the available row bounds (spec
+    // minimums as floors; the rate slot absorbs any extra width as the window widens). Called
+    // once per resized() before the column-header row and the 3 strips are laid out.
+    void computeLaneColumns (juce::Rectangle<int> rowBounds);
+
+    void layoutLaneStrip (int laneIndex, juce::Rectangle<int> rowArea);
     static void styleRotary (juce::Slider&, int textBoxWidth, int textBoxHeight);
 
     // Refreshes per-lane enablement + rate/division-slot visibility. Mirrors the Phase 1

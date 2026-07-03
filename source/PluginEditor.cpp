@@ -95,7 +95,7 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     styleRotary (mixSlider, 46, 16);
     styleRotary (smoothSlider, 46, 16);
     styleRotary (xoverLowSlider, 46, 16);
-    styleRotary (xoverHighSlider, 46, 16);
+    styleRotary (xoverHighSlider, 62, 16); // wide enough for "2500 Hz" (finding #1)
     mixSlider.setTooltip ("Blend between dry and processed signal");
     smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");
     xoverLowSlider.setTooltip ("Crossover between the Low and Mid bands");
@@ -117,7 +117,9 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     refreshEnablement();
     refreshXoverHint();
 
-    setSize (560, 640);
+    setResizable (true, true);
+    setResizeLimits (620, 560, 1000, 900);
+    setSize (700, 620);
     startTimerHz (60);
 }
 
@@ -164,11 +166,13 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
 
     s.rateSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     s.rateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+    // Lane knobs (and now the Rate slider's fill) carry lane identity (the LnF default fill
+    // is primary, reserved for global controls) — see drawLinearSlider/drawRotarySlider.
+    s.rateSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
     addAndMakeVisible (s.rateSlider);
 
     styleRotary (s.phaseSlider, 40, 14);
-    styleRotary (s.depthSlider, 42, 14);
-    // Lane knobs carry lane identity (the LnF default fill is primary, for global knobs).
+    styleRotary (s.depthSlider, 44, 14);
     s.phaseSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
     s.depthSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
     addAndMakeVisible (s.phaseSlider);
@@ -355,17 +359,50 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     using C = LFlOwLookAndFeel::Colors;
     g.fillAll (juce::Colour (C::background));
 
+    constexpr int margin = 12;
+
     // Header accent line (2px, primary at 0.4 alpha).
     g.setColour (juce::Colour (C::primary).withAlpha (0.4f));
-    g.fillRect (12, 4, getWidth() - 24, 2);
+    g.fillRect (margin, 4, getWidth() - margin * 2, 2);
 
-    // Title (16pt Bold) + brand (10pt), generic fonts — never name "Arial".
+    // Consolidated header line (finding #4/#8): "LFlOw" 16pt bold + "LFO + FLOW" 10pt in a
+    // compact left lockup, Bypass right-aligned in the SAME line (bounds set in resized()) —
+    // the old 40px brand block and Bypass's private row are gone.
+    auto headerLine = getLocalBounds().reduced (margin).removeFromTop (32);
+
+    juce::Font titleFont (juce::FontOptions (16.0f).withStyle ("Bold"));
+    g.setFont (titleFont);
     g.setColour (juce::Colour (C::onSurface));
-    g.setFont (juce::Font (juce::FontOptions (16.0f).withStyle ("Bold")));
-    g.drawText ("LFlOw", 12, 12, getWidth() - 24, 20, juce::Justification::centred, false);
+    const int titleW = (int) std::ceil (juce::TextLayout::getStringWidth (titleFont, "LFlOw")) + 6;
+    g.drawText ("LFlOw", headerLine.withWidth (titleW), juce::Justification::centredLeft, false);
+
+    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    g.setColour (juce::Colour (C::onSurfaceVariant));
+    g.drawText ("LFO + FLOW", headerLine.withTrimmedLeft (titleW + 8),
+                juce::Justification::centredLeft, false);
+
+    // Painted column-header row (finding #2): "WAVE SYNC RATE PHASE DEST DEPTH", x-aligned to
+    // the SAME laneGrid columns layoutLaneStrip() uses (computed once in resized()).
     g.setColour (juce::Colour (C::onSurfaceVariant));
     g.setFont (juce::Font (juce::FontOptions (10.0f)));
-    g.drawText ("LFO + FLOW", 12, 32, getWidth() - 24, 14, juce::Justification::centred, false);
+    auto drawColumnLabel = [&] (const ColumnSlot& c, const char* text)
+    {
+        juce::Rectangle<int> r (c.x, laneGrid.headerRow.getY(), c.w, laneGrid.headerRow.getHeight());
+        g.drawText (text, r, juce::Justification::centred, false);
+    };
+    drawColumnLabel (laneGrid.wave,  "WAVE");
+    drawColumnLabel (laneGrid.sync,  "SYNC");
+    drawColumnLabel (laneGrid.rate,  "RATE");
+    drawColumnLabel (laneGrid.phase, "PHASE");
+    drawColumnLabel (laneGrid.dest,  "DEST");
+    drawColumnLabel (laneGrid.depth, "DEPTH");
+
+    // Global row grouping (finding #8): thin divider + "BANDS" micro-label scope the crossover
+    // knobs, so they read as a subordinate group rather than equal-weight controls.
+    g.setColour (juce::Colour (C::outline));
+    g.fillRect (globalGrid.dividerLine);
+    g.setFont (juce::Font (juce::FontOptions (9.0f)));
+    g.drawText ("BANDS", globalGrid.bandsLabel, juce::Justification::centred, false);
 
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
@@ -376,92 +413,165 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
 
 void LFlOwAudioProcessorEditor::resized()
 {
-    auto area = getLocalBounds().reduced (12);
-    area.removeFromTop (40); // header block (accent + title + brand, drawn in paint)
+    constexpr int margin = 12;
+    auto area = getLocalBounds().reduced (margin);
 
-    auto header = area.removeFromTop (28);
-    bypassButton.setBounds (header.removeFromRight (80));
+    // Header line (~32px): title lockup (painted) + Bypass (component), right-aligned, both
+    // in this one line — see paint().
+    auto headerLine = area.removeFromTop (32);
+    bypassButton.setBounds (headerLine.removeFromRight (80).withSizeKeepingCentre (80, 24));
+    area.removeFromTop (4);
 
-    area.removeFromTop (10);
-    area.removeFromBottom (18); // footer (drawn in paint)
+    // Footer (painted) claims its space first.
+    area.removeFromBottom (18);
 
-    display.setBounds (area.removeFromTop (150));
-    area.removeFromTop (8);
+    // The global row and the 3 lane strips are fixed-height and anchored to the bottom; the
+    // column-header row sits directly above the strips it labels; the DISPLAY absorbs
+    // whatever vertical space is left between the header and that block (design system:
+    // "vertical growth goes to the display").
+    constexpr int globalRowHeight = 70;
+    auto globalRow = area.removeFromBottom (globalRowHeight);
+    area.removeFromBottom (14); // gap holding the painted "BANDS" micro-label above globalRow
+
+    constexpr int stripHeight = 64;
+    constexpr int stripGap = 6;
+    auto stripsBlock = area.removeFromBottom (stripHeight * 3 + stripGap * 2);
+    area.removeFromBottom (4);
+
+    laneGrid.headerRow = area.removeFromBottom (14);
+    area.removeFromBottom (2);
+
+    // Column x-positions/widths are a function of width only, shared by the header row above
+    // and every strip below (single source of truth — no duplicated magic x's).
+    computeLaneColumns (laneGrid.headerRow);
+
+    // Whatever's left grows with the window (>=200px at the 700x620 default per the design
+    // system; horizontal growth stretches the display along with the strips' rate slot).
+    display.setBounds (area);
 
     for (int i = 0; i < 3; ++i)
     {
-        layoutLaneStrip (i, area.removeFromTop (85));
-        if (i < 2) area.removeFromTop (6);
+        layoutLaneStrip (i, stripsBlock.removeFromTop (stripHeight));
+        if (i < 2) stripsBlock.removeFromTop (stripGap);
     }
 
-    area.removeFromTop (10);
-    auto globalRow = area; // remaining space for the global controls row
+    // ---- Global row: Link pill | Mix, Smooth knobs | divider + "BANDS" | Xover Lo, Xover Hi.
+    // This group's content is a fixed width (doesn't stretch — the design system only grows
+    // the rate slot and the display) but is centered in the row rather than left-packed, so it
+    // doesn't strand a lopsided gap on the right as the window widens.
+    constexpr int gapG = 8;
+    constexpr int knobColW = 60;
+    constexpr int globalContentW = 60 + gapG + knobColW + gapG + knobColW + gapG
+                                    + 16 + gapG + knobColW + gapG + 76;
+    globalRow = globalRow.withSizeKeepingCentre (juce::jmin (globalContentW, globalRow.getWidth()),
+                                                  globalRow.getHeight());
 
-    auto linkArea = globalRow.removeFromLeft (64);
-    linkButton.setBounds (linkArea.withSizeKeepingCentre (60, 26));
+    auto linkArea = globalRow.removeFromLeft (60);
+    linkButton.setBounds (linkArea.withSizeKeepingCentre (56, 26));
 
-    globalRow.removeFromLeft (8);
-    auto mixArea = globalRow.removeFromLeft (64);
-    mixLabel.setBounds (mixArea.removeFromTop (16));
+    globalRow.removeFromLeft (gapG);
+    auto mixArea = globalRow.removeFromLeft (knobColW);
+    mixLabel.setBounds (mixArea.removeFromTop (14));
     mixSlider.setBounds (mixArea);
 
-    globalRow.removeFromLeft (8);
-    auto smoothArea = globalRow.removeFromLeft (64);
-    smoothLabel.setBounds (smoothArea.removeFromTop (16));
+    globalRow.removeFromLeft (gapG);
+    auto smoothArea = globalRow.removeFromLeft (knobColW);
+    smoothLabel.setBounds (smoothArea.removeFromTop (14));
     smoothSlider.setBounds (smoothArea);
 
-    globalRow.removeFromLeft (8);
-    auto xoverLowArea = globalRow.removeFromLeft (64);
-    xoverLowLabel.setBounds (xoverLowArea.removeFromTop (16));
+    globalRow.removeFromLeft (gapG);
+    auto dividerZone = globalRow.removeFromLeft (16);
+    globalGrid.dividerLine = juce::Rectangle<int> (dividerZone.getCentreX(), globalRow.getY(),
+                                                    1, globalRow.getHeight());
+
+    globalRow.removeFromLeft (gapG);
+    auto xoverLowArea = globalRow.removeFromLeft (knobColW);
+    xoverLowLabel.setBounds (xoverLowArea.removeFromTop (14));
     xoverLowSlider.setBounds (xoverLowArea);
 
-    globalRow.removeFromLeft (8);
-    auto xoverHighArea = globalRow.removeFromLeft (64);
-    xoverHighLabel.setBounds (xoverHighArea.removeFromTop (16));
+    globalRow.removeFromLeft (gapG);
+    auto xoverHighArea = globalRow.removeFromLeft (76); // extra width: textbox needs "2500 Hz"
+    xoverHighLabel.setBounds (xoverHighArea.removeFromTop (14));
     xoverHighSlider.setBounds (xoverHighArea);
+
+    globalGrid.bandsLabel = juce::Rectangle<int> (xoverLowArea.getX(), globalRow.getY() - 12,
+                                                   xoverHighArea.getRight() - xoverLowArea.getX(), 12);
 }
 
-void LFlOwAudioProcessorEditor::layoutLaneStrip (int i, juce::Rectangle<int> area)
+void LFlOwAudioProcessorEditor::computeLaneColumns (juce::Rectangle<int> rowBounds)
+{
+    // Spec minimums as floors (Phase 6 design system); the rate slot absorbs any extra width
+    // as the window widens, everything else stays at its floor.
+    constexpr int gap = 4;
+    constexpr int chipW = 20, nameW = 48, waveW = 120, syncW = 52, rateFloor = 150,
+                  phaseW = 48, destW = 78, depthW = 52;
+    constexpr int numGaps = 7;
+
+    const int x0 = rowBounds.getX();
+    const int totalW = rowBounds.getWidth();
+    const int fixedSum = chipW + nameW + waveW + syncW + phaseW + destW + depthW;
+    const int floorTotal = fixedSum + rateFloor + numGaps * gap;
+    const int rateW = rateFloor + juce::jmax (0, totalW - floorTotal);
+
+    int x = x0;
+    auto place = [&] (ColumnSlot& slot, int w)
+    {
+        slot.x = x;
+        slot.w = w;
+        x += w + gap;
+    };
+
+    place (laneGrid.chip,  chipW);
+    place (laneGrid.name,  nameW);
+    place (laneGrid.wave,  waveW);
+    place (laneGrid.sync,  syncW);
+    place (laneGrid.rate,  rateW);
+    place (laneGrid.phase, phaseW);
+    place (laneGrid.dest,  destW);
+    place (laneGrid.depth, depthW); // last column, trailing gap unused
+}
+
+void LFlOwAudioProcessorEditor::layoutLaneStrip (int i, juce::Rectangle<int> rowArea)
 {
     auto& s = laneStrips[(size_t) i];
-    constexpr int gap = 5;
-    const int stripHeight = area.getHeight();
+    const int y = rowArea.getY();
+    const int h = rowArea.getHeight();
 
-    auto chipArea = area.removeFromLeft (20);
-    s.chip.setBounds (chipArea.withSizeKeepingCentre (18, 18));
-    area.removeFromLeft (gap);
+    // One shared control center line per strip (finding #4): flat controls (combo/pill/rate
+    // slider) center on it directly; rotary knobs center their ARC on it too, with the value
+    // textbox stacked tight underneath as part of the same Slider component (not floating).
+    constexpr int centerLineY = 24;  // relative to the strip's top
+    constexpr int flatH = 24;        // combo/pill/rate-slider box height
+    constexpr int knobRegionH = 30;  // rotary arc region height (before its textbox)
+    constexpr int textBoxH = 14;
 
-    auto labelArea = area.removeFromLeft (46);
-    s.nameLabel.setBounds (labelArea.withSizeKeepingCentre (46, 16));
-    area.removeFromLeft (gap);
+    auto col = [&] (const ColumnSlot& c) { return juce::Rectangle<int> (c.x, y, c.w, h); };
+    auto placeFlat = [&] (const ColumnSlot& c, int w)
+    {
+        return col (c).withSizeKeepingCentre (w, flatH).withY (y + centerLineY - flatH / 2);
+    };
+    auto placeKnob = [&] (juce::Slider& slider, const ColumnSlot& c)
+    {
+        slider.setBounds (col (c).withY (y + centerLineY - knobRegionH / 2)
+                                  .withHeight (knobRegionH + textBoxH));
+    };
 
-    auto waveformArea = area.removeFromLeft (92);
-    s.waveformBox.setBounds (waveformArea.withSizeKeepingCentre (92, 24));
-    area.removeFromLeft (gap);
+    s.chip.setBounds (placeFlat (laneGrid.chip, 18));
+    s.nameLabel.setBounds (placeFlat (laneGrid.name, laneGrid.name.w));
+    s.waveformBox.setBounds (placeFlat (laneGrid.wave, laneGrid.wave.w));
+    s.syncButton.setBounds (placeFlat (laneGrid.sync, laneGrid.sync.w));
 
-    auto syncArea = area.removeFromLeft (46);
-    s.syncButton.setBounds (syncArea.withSizeKeepingCentre (46, 24));
-    area.removeFromLeft (gap);
-
-    // Rate slider and Division+Rhythm boxes occupy the same slot; refreshEnablement()
-    // shows/enables whichever pair matches this lane's effective sync state.
-    auto rateSlotArea = area.removeFromLeft (140);
-    auto rateBounds = rateSlotArea.withSizeKeepingCentre (140, 24);
+    // Rate slider and Division+Rhythm boxes occupy the same slot; refreshEnablement() shows/
+    // enables whichever pair matches this lane's effective sync state.
+    auto rateBounds = placeFlat (laneGrid.rate, laneGrid.rate.w);
     s.rateSlider.setBounds (rateBounds);
     auto divRhythm = rateBounds;
-    s.divisionBox.setBounds (divRhythm.removeFromLeft (68));
+    constexpr int divisionW = 70;
+    s.divisionBox.setBounds (divRhythm.removeFromLeft (divisionW));
     divRhythm.removeFromLeft (4);
     s.rhythmBox.setBounds (divRhythm);
-    area.removeFromLeft (gap);
 
-    auto phaseArea = area.removeFromLeft (42);
-    s.phaseSlider.setBounds (phaseArea.withSizeKeepingCentre (42, stripHeight));
-    area.removeFromLeft (gap);
-
-    auto destArea = area.removeFromLeft (62);
-    s.destBox.setBounds (destArea.withSizeKeepingCentre (62, 24));
-    area.removeFromLeft (gap);
-
-    // Depth rotary takes the remainder of the strip's width.
-    s.depthSlider.setBounds (area.withSizeKeepingCentre (juce::jmin (46, area.getWidth()), stripHeight));
+    placeKnob (s.phaseSlider, laneGrid.phase);
+    s.destBox.setBounds (placeFlat (laneGrid.dest, laneGrid.dest.w));
+    placeKnob (s.depthSlider, laneGrid.depth);
 }

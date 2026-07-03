@@ -68,4 +68,12 @@ public:
     // ---- Labels (also the mechanism behind every slider's readout textbox and combo box
     // text): borderless/backgroundless, single disabled-alpha standard.
     void drawLabel (juce::Graphics&, juce::Label&) override;
+
+    // ---- Linear sliders (lane Rate sliders only, LinearHorizontal): flat rounded track in
+    // `outline`, filled portion in the slider's own accent (rotarySliderFillColourId, set
+    // per-lane in buildLaneStrip like the rotary knobs), slim rounded-capsule thumb — no
+    // stock white ball. Disabled = 35% alpha, same standard as every other control here.
+    void drawLinearSlider (juce::Graphics&, int x, int y, int width, int height,
+                            float sliderPos, float minSliderPos, float maxSliderPos,
+                            const juce::Slider::SliderStyle, juce::Slider&) override;
 };

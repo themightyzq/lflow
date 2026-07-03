@@ -356,6 +356,26 @@ void LfoDisplay::paint (juce::Graphics& g)
     g.setColour (juce::Colour (C::outline));
     g.drawRoundedRectangle (r, 6.0f, 1.0f);
 
+    // Gridlines (finding #8): faint quarter-cycle verticals + a dotted 50% center line, both
+    // free legibility aids for phase offsets and drawn shapes. Drawn behind the lane curves.
+    {
+        g.setColour (juce::Colour (C::outline).withAlpha (0.5f));
+        for (float frac : { 0.25f, 0.5f, 0.75f })
+        {
+            const float x = r.getX() + frac * r.getWidth();
+            g.drawLine (x, r.getY(), x, r.getBottom(), 1.0f);
+        }
+
+        juce::Path centerLine;
+        centerLine.startNewSubPath (r.getX(), r.getCentreY());
+        centerLine.lineTo (r.getRight(), r.getCentreY());
+        float dashLengths[] = { 2.0f, 3.0f };
+        juce::Path dashed;
+        juce::PathStrokeType (1.0f).createDashedStroke (dashed, centerLine, dashLengths, 2);
+        g.setColour (juce::Colour (C::outline).withAlpha (0.7f));
+        g.fillPath (dashed);
+    }
+
     const auto transform = juce::AffineTransform::scale (r.getWidth(), r.getHeight())
                                 .translated (r.getX(), r.getY());
 

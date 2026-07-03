@@ -6,25 +6,41 @@
 
 namespace {
 
-// Reads one lane's APVTS parameters (atomic loads only) into a LaneParams. Local helper,
-// not a member, so it can be a free function taking the id set explicitly per lane.
-lflow::LaneParams readLaneParams (const juce::AudioProcessorValueTreeState& apvts,
-                                   const char* waveformId, const char* syncId, const char* rateHzId,
-                                   const char* divisionId, const char* rhythmId, const char* phaseId,
-                                   const char* depthId, const char* destId)
+// Reads one lane's parameters (atomic loads only, no string-keyed lookups -- QA L2) into a
+// LaneParams from a pre-cached LaneParamPtrs. Local helper, not a member, so it can be a free
+// function taking the pointer set explicitly per lane.
+lflow::LaneParams readLaneParams (const lflow::LaneParamPtrs& p)
 {
-    lflow::LaneParams p;
-    p.waveform = static_cast<lflow::Waveform> ((int) apvts.getRawParameterValue (waveformId)->load());
-    p.sync     = apvts.getRawParameterValue (syncId)->load() > 0.5f;
-    p.rateHz   = (double) apvts.getRawParameterValue (rateHzId)->load();
-    const auto div = static_cast<lflow::Division> ((int) apvts.getRawParameterValue (divisionId)->load());
-    const auto rhy = static_cast<lflow::Rhythm>   ((int) apvts.getRawParameterValue (rhythmId)->load());
-    p.cycleBeats = lflow::cycleBeats (div, rhy);
-    p.depth      = apvts.getRawParameterValue (depthId)->load();
-    p.dest       = static_cast<lflow::Dest> ((int) apvts.getRawParameterValue (destId)->load());
-    const float degrees = apvts.getRawParameterValue (phaseId)->load();
-    p.phaseOffset = degrees / 360.0f;
-    return p;
+    lflow::LaneParams result;
+    result.waveform = static_cast<lflow::Waveform> ((int) p.waveform->load());
+    result.sync     = p.sync->load() > 0.5f;
+    result.rateHz   = (double) p.rateHz->load();
+    const auto div  = static_cast<lflow::Division> ((int) p.division->load());
+    const auto rhy  = static_cast<lflow::Rhythm>   ((int) p.rhythm->load());
+    result.cycleBeats = lflow::cycleBeats (div, rhy);
+    result.depth       = p.depth->load();
+    result.dest        = static_cast<lflow::Dest> ((int) p.dest->load());
+    const float degrees = p.phase->load();
+    result.phaseOffset  = degrees / 360.0f;
+    return result;
+}
+
+// Populates one lane's cached pointers from the given APVTS + id set. Message-thread-only
+// (called once, from the ctor). Kept as a free function (mirrors readLaneParams above) rather
+// than a member so the id-set-per-lane shape stays visible at each call site.
+void cacheLaneParams (juce::AudioProcessorValueTreeState& apvts, lflow::LaneParamPtrs& lp,
+                       const char* waveformId, const char* syncId, const char* rateHzId,
+                       const char* divisionId, const char* rhythmId, const char* phaseId,
+                       const char* depthId, const char* destId)
+{
+    lp.waveform = apvts.getRawParameterValue (waveformId);
+    lp.sync     = apvts.getRawParameterValue (syncId);
+    lp.rateHz   = apvts.getRawParameterValue (rateHzId);
+    lp.division = apvts.getRawParameterValue (divisionId);
+    lp.rhythm   = apvts.getRawParameterValue (rhythmId);
+    lp.phase    = apvts.getRawParameterValue (phaseId);
+    lp.depth    = apvts.getRawParameterValue (depthId);
+    lp.dest     = apvts.getRawParameterValue (destId);
 }
 
 } // namespace
@@ -37,6 +53,30 @@ LFlOwAudioProcessor::LFlOwAudioProcessor()
 {
     bypassParam = apvts.getParameter (lflow::pid::bypass);
 
+    // Cache every processBlock-read parameter as a raw atomic pointer, once, here (message
+    // thread, right after apvts finishes constructing) -- QA L2. See CachedParams' doc comment
+    // in PluginProcessor.h for why these pointers stay valid across setStateInformation's later
+    // apvts.replaceState() calls.
+    cacheLaneParams (apvts, cachedParams.lane[0],
+                      lflow::pid::l1Waveform, lflow::pid::l1Sync, lflow::pid::l1RateHz,
+                      lflow::pid::l1Division, lflow::pid::l1Rhythm, lflow::pid::l1Phase,
+                      lflow::pid::l1Depth, lflow::pid::l1Dest);
+    cacheLaneParams (apvts, cachedParams.lane[1],
+                      lflow::pid::l2Waveform, lflow::pid::l2Sync, lflow::pid::l2RateHz,
+                      lflow::pid::l2Division, lflow::pid::l2Rhythm, lflow::pid::l2Phase,
+                      lflow::pid::l2Depth, lflow::pid::l2Dest);
+    cacheLaneParams (apvts, cachedParams.lane[2],
+                      lflow::pid::l3Waveform, lflow::pid::l3Sync, lflow::pid::l3RateHz,
+                      lflow::pid::l3Division, lflow::pid::l3Rhythm, lflow::pid::l3Phase,
+                      lflow::pid::l3Depth, lflow::pid::l3Dest);
+
+    cachedParams.bypass    = apvts.getRawParameterValue (lflow::pid::bypass);
+    cachedParams.link      = apvts.getRawParameterValue (lflow::pid::link);
+    cachedParams.mix       = apvts.getRawParameterValue (lflow::pid::mix);
+    cachedParams.smooth    = apvts.getRawParameterValue (lflow::pid::smooth);
+    cachedParams.xoverLow  = apvts.getRawParameterValue (lflow::pid::xoverLow);
+    cachedParams.xoverHigh = apvts.getRawParameterValue (lflow::pid::xoverHigh);
+
     // Constructed AFTER apvts: ensures/loads the SHAPES ValueTree subtree and does the
     // initial bake+publish for all 3 lanes (shapeBuffers already default-constructed above).
     shapeManager = std::make_unique<lflow::ShapeManager> (apvts, shapeBuffers);
@@ -48,7 +88,7 @@ void LFlOwAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     // ~30 ms bypass crossfade ramp, click-free. Seed from the ACTUAL bypass state so a
     // session loaded (or re-prepared) while bypassed doesn't leak 30 ms of wet signal.
-    const bool bypassedNow = apvts.getRawParameterValue (lflow::pid::bypass)->load() > 0.5f;
+    const bool bypassedNow = cachedParams.bypass->load() > 0.5f;
     bypassGain.reset (sampleRate, 0.03);
     bypassGain.setCurrentAndTargetValue (bypassedNow ? 0.0f : 1.0f);
 
@@ -68,22 +108,16 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 {
     juce::ScopedNoDenormals noDenormals;
 
-    const bool bypassed = apvts.getRawParameterValue (lflow::pid::bypass)->load() > 0.5f;
+    const bool bypassed = cachedParams.bypass->load() > 0.5f;
     bypassGain.setTargetValue (bypassed ? 0.0f : 1.0f);
 
-    const bool link = apvts.getRawParameterValue (lflow::pid::link)->load() > 0.5f;
+    const bool link = cachedParams.link->load() > 0.5f;
 
     lflow::LaneParams lanes[lflow::MultiLaneEngine::kNumLanes] =
     {
-        readLaneParams (apvts, lflow::pid::l1Waveform, lflow::pid::l1Sync, lflow::pid::l1RateHz,
-                         lflow::pid::l1Division, lflow::pid::l1Rhythm, lflow::pid::l1Phase,
-                         lflow::pid::l1Depth, lflow::pid::l1Dest),
-        readLaneParams (apvts, lflow::pid::l2Waveform, lflow::pid::l2Sync, lflow::pid::l2RateHz,
-                         lflow::pid::l2Division, lflow::pid::l2Rhythm, lflow::pid::l2Phase,
-                         lflow::pid::l2Depth, lflow::pid::l2Dest),
-        readLaneParams (apvts, lflow::pid::l3Waveform, lflow::pid::l3Sync, lflow::pid::l3RateHz,
-                         lflow::pid::l3Division, lflow::pid::l3Rhythm, lflow::pid::l3Phase,
-                         lflow::pid::l3Depth, lflow::pid::l3Dest),
+        readLaneParams (cachedParams.lane[0]),
+        readLaneParams (cachedParams.lane[1]),
+        readLaneParams (cachedParams.lane[2]),
     };
 
     lflow::resolveLinkedLanes (lanes, lflow::MultiLaneEngine::kNumLanes, link);
@@ -92,12 +126,12 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         engine.setLaneParams (i, lanes[i]);
 
     lflow::GlobalParams g;
-    g.mix    = apvts.getRawParameterValue (lflow::pid::mix)->load();
-    g.smooth = apvts.getRawParameterValue (lflow::pid::smooth)->load();
+    g.mix    = cachedParams.mix->load();
+    g.smooth = cachedParams.smooth->load();
     engine.setGlobalParams (g);
 
-    const double xoverLow  = (double) apvts.getRawParameterValue (lflow::pid::xoverLow)->load();
-    const double xoverHigh = (double) apvts.getRawParameterValue (lflow::pid::xoverHigh)->load();
+    const double xoverLow  = (double) cachedParams.xoverLow->load();
+    const double xoverHigh = (double) cachedParams.xoverHigh->load();
     engine.setCrossovers (xoverLow, xoverHigh);
 
     // Custom-shape tables: acquire() is wait-free (single atomic exchange at most), so it's
@@ -182,8 +216,47 @@ void LFlOwAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
 
 void LFlOwAudioProcessor::setStateInformation (const void* data, int size)
 {
-    if (auto xml = getXmlFromBinary (data, size))
-        apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    // QA M1: some hosts call setStateInformation() off the message thread. apvts.replaceState()
+    // reassigns apvts.state to a new juce::ValueTree, which fires ShapeManager's
+    // valueTreeRedirected() -> ensureShapesTree() -> rebakeAndPublishAll() (mutating the tree,
+    // baking, and publishing to the lock-free ShapeTableBuffer) -- and the editor's 60 Hz timer
+    // concurrently READS that same tree via getNodes() on the message thread. juce::ValueTree is
+    // not thread-safe, so applying replaceState() directly from an arbitrary caller thread would
+    // race both. Parsing the XML into a ValueTree is pure/read-only (no APVTS mutation, no
+    // shared-tree touch) and safe to do on whichever thread called us; only the actual APPLY
+    // (apvts.replaceState()) needs to happen on the message thread.
+    auto xml = getXmlFromBinary (data, size);
+    if (xml == nullptr)
+        return;
+
+    auto tree = juce::ValueTree::fromXml (*xml);
+    if (! tree.isValid())
+        return;
+
+    if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        apvts.replaceState (tree);
+        return;
+    }
+
+    // Off the message thread: marshal the apply. `tree` is captured BY VALUE into the lambda --
+    // juce::ValueTree is a lightweight, ref-counted handle (like a shared_ptr to its underlying
+    // SharedObject), so this copy is cheap and does NOT touch the live/old apvts.state tree that
+    // the message thread may be reading/writing concurrently; it only bumps a refcount on the
+    // newly-parsed, not-yet-installed tree. The lambda runs later, asynchronously, on the message
+    // thread (per juce::MessageManager::callAsync's contract) -- by which point the host could
+    // have destroyed this processor (e.g. a fast plugin-scan load/unload racing the state-set
+    // call), since callAsync's completion is not ordered against, or guaranteed to happen before,
+    // the processor's destructor. `safeThis` (a juce::WeakReference, backed by
+    // JUCE_DECLARE_WEAK_REFERENCEABLE in the header) is checked inside the lambda immediately
+    // before touching `apvts`; if the processor is already gone, safeThis.get() returns nullptr
+    // and the apply is silently skipped (there is nothing left to apply state to).
+    juce::WeakReference<LFlOwAudioProcessor> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis, tree]
+    {
+        if (auto* self = safeThis.get())
+            self->apvts.replaceState (tree);
+    });
 }
 
 juce::AudioProcessorEditor* LFlOwAudioProcessor::createEditor()

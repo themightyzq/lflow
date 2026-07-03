@@ -1,6 +1,7 @@
 #include "ShapeManager.h"
 #include "MultiLaneEngine.h"
 #include <algorithm>
+#include <cmath>
 
 // ValueTree layout (persisted, part of apvts.state -> XML round-trip via get/setStateInformation):
 //   <SHAPES>
@@ -139,47 +140,27 @@ juce::ValueTree ShapeManager::getShapeChild (int lane) const
     return {};
 }
 
-std::vector<ShapeNode> ShapeManager::getNodes (int lane) const
+std::vector<ShapeNode> ShapeManager::sanitizeNodes (const std::vector<ShapeNode>& nodesIn)
 {
-    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    std::vector<ShapeNode> nodes;
+    nodes.reserve (nodesIn.size());
 
-    std::vector<ShapeNode> result;
-    if (lane < 0 || lane >= kNumLanes)
-        return result;
-
-    auto shape = getShapeChild (lane);
-    if (! shape.isValid())
-        return result;
-
-    result.reserve ((size_t) shape.getNumChildren());
-    for (int i = 0; i < shape.getNumChildren(); ++i)
+    for (const auto& raw : nodesIn)
     {
-        auto n = shape.getChild (i);
-        if (! n.hasType (kNodeType))
+        // A non-finite x or y can't be placed anywhere meaningful on the [0,1] domain (and
+        // would corrupt the ascending-x sort below), so that node is dropped entirely rather
+        // than coerced to some arbitrary in-range value. A non-finite curve, by contrast,
+        // leaves the node's position (x,y) perfectly well-defined -- only the bend of the
+        // segment following it is unknown -- so that node is KEPT with curve reset to 0.0f
+        // (linear, i.e. no bend) instead of being discarded.
+        if (! std::isfinite (raw.x) || ! std::isfinite (raw.y))
             continue;
 
-        ShapeNode node;
-        node.x     = (float) (double) n.getProperty (kXProp, 0.0);
-        node.y     = (float) (double) n.getProperty (kYProp, 0.0);
-        node.curve = (float) (double) n.getProperty (kCurveProp, 0.0);
-        result.push_back (node);
-    }
-    return result;
-}
-
-void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
-{
-    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
-
-    if (lane < 0 || lane >= kNumLanes)
-        return;
-
-    std::vector<ShapeNode> nodes = nodesIn;
-    for (auto& n : nodes)
-    {
-        n.x     = juce::jlimit (0.0f, 1.0f, n.x);
-        n.y     = juce::jlimit (0.0f, 1.0f, n.y);
-        n.curve = juce::jlimit (-1.0f, 1.0f, n.curve);
+        ShapeNode n;
+        n.x     = juce::jlimit (0.0f, 1.0f, raw.x);
+        n.y     = juce::jlimit (0.0f, 1.0f, raw.y);
+        n.curve = std::isfinite (raw.curve) ? juce::jlimit (-1.0f, 1.0f, raw.curve) : 0.0f;
+        nodes.push_back (n);
     }
 
     // Stable sort keeps caller-supplied relative order for equal-x nodes (harmless -- the
@@ -193,14 +174,61 @@ void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
     if ((int) nodes.size() > kMaxShapeNodes)
         nodes.erase (nodes.begin(), nodes.end() - kMaxShapeNodes);
 
-    // Fewer than 2 surviving nodes can't describe a segment -- reject and fall back to the
-    // documented default triangle rather than persist/bake a degenerate shape.
+    // Fewer than 2 surviving nodes (empty, single-node, or every node dropped above for a
+    // non-finite x/y) can't describe a segment -- reject and fall back to the documented
+    // default triangle rather than persist/bake a degenerate shape.
     if (nodes.size() < 2)
     {
         nodes = { ShapeNode { 0.0f, 0.0f, 0.0f },
                   ShapeNode { 0.5f, 1.0f, 0.0f },
                   ShapeNode { 1.0f, 0.0f, 0.0f } };
     }
+
+    return nodes;
+}
+
+std::vector<ShapeNode> ShapeManager::getNodes (int lane) const
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+
+    std::vector<ShapeNode> result;
+    if (lane < 0 || lane >= kNumLanes)
+        return result;
+
+    auto shape = getShapeChild (lane);
+    if (! shape.isValid())
+        return result;
+
+    std::vector<ShapeNode> raw;
+    raw.reserve ((size_t) shape.getNumChildren());
+    for (int i = 0; i < shape.getNumChildren(); ++i)
+    {
+        auto n = shape.getChild (i);
+        if (! n.hasType (kNodeType))
+            continue;
+
+        ShapeNode node;
+        node.x     = (float) (double) n.getProperty (kXProp, 0.0);
+        node.y     = (float) (double) n.getProperty (kYProp, 0.0);
+        node.curve = (float) (double) n.getProperty (kCurveProp, 0.0);
+        raw.push_back (node);
+    }
+
+    // QA H2: sanitize on the way OUT, identically to setNodes()'s sanitize on the way IN --
+    // this is the reload path (setStateInformation -> valueTreeRedirected -> ensureShapesTree
+    // -> rebakeAndPublishAll -> getNodes), and the ValueTree may hold whatever a crafted,
+    // corrupt, or pre-hardening XML wrote into it with no validation of its own.
+    return sanitizeNodes (raw);
+}
+
+void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+
+    if (lane < 0 || lane >= kNumLanes)
+        return;
+
+    const std::vector<ShapeNode> nodes = sanitizeNodes (nodesIn);
 
     auto shape = getShapeChild (lane);
     if (! shape.isValid())

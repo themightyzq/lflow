@@ -200,10 +200,11 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     setSize (700, 620);
     startTimerHz (60);
 
-    // Best-effort initial focus grab (Phase 7 Task 3) -- a no-op if the editor isn't showing
-    // yet at this point (grabKeyboardFocus() checks isShowing() internally and silently returns
-    // if not); mouseDown() below covers focus after the editor becomes visible and interactive.
-    grabKeyboardFocus();
+    // NOTE (Phase 7 final review): no explicit grabKeyboardFocus() anywhere --
+    // EDITOR_WANTS_KEYBOARD_FOCUS is FALSE for Soundminer compat (host shortcuts like
+    // spacebar preview must keep working after clicking the plugin). setWantsKeyboardFocus
+    // (true) alone provides standard click-to-focus on the editor background, which covers
+    // Cmd-Z in the standalone; in hosts the Undo/Redo pills are the guaranteed path.
 }
 
 LFlOwAudioProcessorEditor::~LFlOwAudioProcessorEditor()
@@ -213,27 +214,21 @@ LFlOwAudioProcessorEditor::~LFlOwAudioProcessorEditor()
 
 void LFlOwAudioProcessorEditor::mouseDown (const juce::MouseEvent&)
 {
-    // Only reached for clicks on the editor's own background (gaps between controls) -- clicks
-    // on a child control are routed straight to that child and never reach here (see the header
-    // doc comment).
-    grabKeyboardFocus();
+    // Background clicks: nothing to force here. Click-to-focus is handled by JUCE via
+    // setWantsKeyboardFocus(true); we deliberately do NOT force-grab focus (host compat).
 }
 
 bool LFlOwAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
     auto& um = processorRef.getUndoManager();
 
+    // Consume the key ONLY when we actually act on it; otherwise return false so the host
+    // keeps its own shortcuts working (Phase 7 final-review fix).
     if (key == juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0))
-    {
-        um.undo();
-        return true;
-    }
+        return um.canUndo() && um.undo();
 
     if (key == juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0))
-    {
-        um.redo();
-        return true;
-    }
+        return um.canRedo() && um.redo();
 
     return false;
 }
@@ -984,7 +979,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
-    g.drawText ("v0.6.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
+    g.drawText ("v0.7.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
                 juce::Justification::centredRight, false);
 }
 

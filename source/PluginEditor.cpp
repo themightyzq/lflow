@@ -105,7 +105,7 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
 
     styleRotary (mixSlider, 46, 16);
     styleRotary (smoothSlider, 46, 16);
-    styleRotary (xoverLowSlider, 46, 16);
+    styleRotary (xoverLowSlider, 62, 16);  // wide enough for "2000 Hz" (finding #1)
     styleRotary (xoverHighSlider, 62, 16); // wide enough for "2500 Hz" (finding #1)
     mixSlider.setTooltip ("Blend between dry and processed signal");
     smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");

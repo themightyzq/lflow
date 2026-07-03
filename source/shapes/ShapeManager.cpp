@@ -66,6 +66,14 @@ void ShapeManager::ensureShapesTree()
     // lane happens below, once the subtree is fully consistent -- this also covers the
     // valueTreeRedirected() call path (state reload), so that override doesn't need its own
     // explicit rebake.
+    //
+    // Phase 7 Task 3 (UX #1): every ValueTree op in this method passes nullptr for its
+    // UndoManager*, deliberately and unconditionally -- factory tree creation/repair must NEVER
+    // be undoable, or a user hammering Cmd-Z past their own edits could walk undo history back
+    // into deleting the SHAPES subtree entirely (leaving the audio thread's shape tables
+    // permanently orphaned). setNodes() is the one place user edits become undoable (see its
+    // doc comment) -- this method never accepts an UndoManager parameter at all, so there is no
+    // call-site that could get this wrong.
     apvts.state.removeListener (this);
 
     auto& root = apvts.state;
@@ -221,7 +229,7 @@ std::vector<ShapeNode> ShapeManager::getNodes (int lane) const
     return sanitizeNodes (raw);
 }
 
-void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
+void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn, juce::UndoManager* undoManagerToUse)
 {
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
 
@@ -244,15 +252,25 @@ void ShapeManager::setNodes (int lane, const std::vector<ShapeNode>& nodesIn)
     // silence if transport is running while a node list is edited (and setNodes() is called
     // once per drag-frame by the editor). Re-enable the listener once the tree is back in a
     // consistent state, then rebake + publish exactly once, explicitly.
+    //
+    // undoManagerToUse is threaded through the two STRUCTURAL ops (removeAllChildren/
+    // appendChild) so this edit becomes one or more UndoableActions on the caller's transaction
+    // (see the header doc comment) -- undoing/redoing a node add/remove replays OUTSIDE this
+    // bracket (it happens later, from a completely separate call stack when the user hits
+    // Cmd-Z), so our listener is attached as normal at that point and rebakeAndPublishAll()
+    // still runs, which is what makes the undo audible/visible. The freshly-built nodeTree's
+    // own property sets stay on nullptr: the node isn't attached to anything yet when they run,
+    // so there's nothing meaningful for an undo action to reference -- appendChild() (with
+    // undoManagerToUse) is what makes undo/redo restore the WHOLE node, properties included.
     apvts.state.removeListener (this);
-    shape.removeAllChildren (nullptr);
+    shape.removeAllChildren (undoManagerToUse);
     for (auto& n : nodes)
     {
         juce::ValueTree nodeTree (kNodeType);
         nodeTree.setProperty (kXProp, (double) n.x, nullptr);
         nodeTree.setProperty (kYProp, (double) n.y, nullptr);
         nodeTree.setProperty (kCurveProp, (double) n.curve, nullptr);
-        shape.appendChild (nodeTree, nullptr);
+        shape.appendChild (nodeTree, undoManagerToUse);
     }
     apvts.state.addListener (this);
 

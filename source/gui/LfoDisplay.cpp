@@ -227,6 +227,11 @@ void LfoDisplay::mouseDown (const juce::MouseEvent& e)
     if (editLane < 0)
         return;
 
+    // Phase 7 Task 3 (UX #1): one transaction per gesture, started here before any
+    // hit-testing/mutation -- see onGestureStart's doc comment (header).
+    if (onGestureStart)
+        onGestureStart();
+
     const int hitNode = findNodeNear (e.position);
     if (hitNode >= 0)
     {

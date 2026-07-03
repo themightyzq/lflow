@@ -49,8 +49,14 @@ LFlOwAudioProcessor::LFlOwAudioProcessor()
     : AudioProcessor (BusesProperties()
         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "PARAMS", lflow::createParameterLayout())
+      apvts (*this, &undoManager, "PARAMS", lflow::createParameterLayout())
 {
+    // Phase 7 Task 3 (UX #1): 30000 units / 30 minimum transactions is JUCE's own UndoManager
+    // default, restated explicitly here so the cap is documented rather than implicit. Plenty
+    // of headroom for a session of parameter tweaks and shape-editing gestures without the
+    // history silently growing unbounded.
+    undoManager.setMaxNumberOfStoredUnits (30000, 30);
+
     bypassParam = apvts.getParameter (lflow::pid::bypass);
 
     // Cache every processBlock-read parameter as a raw atomic pointer, once, here (message

@@ -46,6 +46,21 @@ public:
     // intermediate state is never observed/baked/published -- see .cpp), followed by exactly
     // one explicit rebake + publish of this lane. Validation is done by the shared sanitize()
     // helper (see .cpp) -- same rules getNodes() applies on read:
+    //
+    // `undoManagerToUse` (Phase 7 Task 3, UX #1): pass the shared processor UndoManager (see
+    // LFlOwAudioProcessor::getUndoManager()) so this edit becomes one undo step; the CALLER
+    // (the editor) is responsible for transaction boundaries via undoManager.beginNewTransaction()
+    // -- e.g. once per curve-editor mouse-down gesture, so a whole node drag (many setNodes()
+    // calls, one per drag frame) collapses into a single undo/redo. Passing nullptr (the
+    // default) makes the edit non-undoable, which is what ensureShapesTree()'s OWN internal
+    // mutations always use (see its doc comment) -- undo must never be able to delete the
+    // factory-populated SHAPES tree itself, only edits made through this public setNodes() path.
+    // Undo/redo replay of a structural ValueTree change (child add/remove) fires this object's
+    // OWN valueTreeChildAdded/valueTreeChildRemoved listener callbacks just like any other
+    // externally-driven change (state reload, automation) -- those callbacks are NOT suppressed
+    // during an undo/redo replay (only this method's OWN mutation is bracketed, see .cpp), so
+    // rebakeAndPublishAll() still runs and republishes the reverted table to the audio thread,
+    // which is what makes curve undo audible.
     //   - a node whose x or y is non-finite is DROPPED entirely (can't be placed anywhere
     //     meaningful on the [0,1] domain); a node whose curve alone is non-finite is KEPT with
     //     curve reset to 0 (linear/no bend -- the node's position is still well-defined);
@@ -61,7 +76,7 @@ public:
     //     a shape needs at least 2 breakpoints to describe a segment at all, so rather than
     //     persist a degenerate table we fall back to something well-defined and audible.
     // Message thread only.
-    void setNodes (int lane, const std::vector<ShapeNode>& nodes);
+    void setNodes (int lane, const std::vector<ShapeNode>& nodes, juce::UndoManager* undoManagerToUse = nullptr);
 
 private:
     // Shared validation pass used by BOTH setNodes() (on write) and getNodes() (on read, QA H2)

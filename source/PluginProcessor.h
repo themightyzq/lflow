@@ -80,6 +80,15 @@ public:
     // Message-thread accessor for the editor (Task 3) to read/edit per-lane shape node lists.
     lflow::ShapeManager& getShapeManager() noexcept { return *shapeManager; }
 
+    // Phase 7 Task 3 (UX #1): the single juce::UndoManager shared by every undoable edit in
+    // the plugin -- APVTS parameter changes (wired in via the ctor's 2nd arg, which makes every
+    // SliderAttachment/ComboBoxAttachment/ButtonAttachment's gesture automatically undoable,
+    // see JUCE's ParameterAttachment::beginGesture()/setValueAsCompleteGesture()) and
+    // ShapeManager's node-list edits (passed in explicitly by the editor at each setNodes()
+    // call -- see ShapeManager::setNodes()'s doc comment). Message-thread only, like everything
+    // else UI/undo related here.
+    juce::UndoManager& getUndoManager() noexcept { return undoManager; }
+
     float getLanePhase (int lane) const noexcept
     {
         return (lane >= 0 && lane < lflow::MultiLaneEngine::kNumLanes) ? lanePhaseAtomic[(size_t) lane].load() : 0.0f;
@@ -90,6 +99,12 @@ public:
     }
 
 private:
+    // Phase 7 Task 3 (UX #1): must be declared/constructed BEFORE apvts below -- its ctor
+    // initializer list passes `&undoManager` to AudioProcessorValueTreeState's constructor, and
+    // member construction order follows DECLARATION order (not initializer-list order), so
+    // undoManager has to come first in the class body regardless of init-list position.
+    juce::UndoManager undoManager;
+
     juce::AudioProcessorValueTreeState apvts;
     juce::AudioProcessorParameter* bypassParam { nullptr };
 

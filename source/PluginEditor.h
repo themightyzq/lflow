@@ -20,6 +20,21 @@ public:
     void resized() override;
     void timerCallback() override;
 
+    // Phase 7 Task 3 (UX #1): Cmd-Z / Cmd-Shift-Z, dispatched here regardless of which child
+    // control currently has keyboard focus -- JUCE bubbles an unhandled key press up the parent
+    // chain from the focused component (see juce::ComponentPeer::handleKeyPress), so this fires
+    // even while e.g. a slider or combo box owns focus, as long as that control doesn't itself
+    // consume the 'z' key (none of ours do).
+    bool keyPressed (const juce::KeyPress&) override;
+
+    // Ensures SOME component within the editor holds keyboard focus after any click on the
+    // editor's own background (gaps between controls) -- clicks that land on a child control
+    // already grab focus automatically via JUCE's own Component::internalMouseDown (see
+    // grabKeyboardFocusInternal), this just covers the rest. setWantsKeyboardFocus(true) (ctor)
+    // makes the editor itself a valid focus target so keyPressed above always has somewhere to
+    // dispatch from, even before the user has clicked any specific control.
+    void mouseDown (const juce::MouseEvent&) override;
+
 private:
     using APVTS = juce::AudioProcessorValueTreeState;
 
@@ -124,6 +139,13 @@ private:
 
     juce::TextButton bypassButton { "Bypass" };
     std::unique_ptr<APVTS::ButtonAttachment> bypassAtt;
+
+    // Phase 7 Task 3 (UX #1): header pills, right of the brand lockup / left of Bypass. Plain
+    // (non-toggle) TextButtons -- momentary actions, matching Bypass's own unstyled-by-LnF look
+    // (LFlOwLookAndFeel doesn't override TextButton drawing; Bypass only tints its ON state via
+    // buttonOnColourId, which doesn't apply here since these aren't toggles). Enabled state
+    // tracks canUndo()/canRedo(), refreshed each timerCallback tick.
+    juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
 
     // Which lane (0-2), if any, is currently being edited in the display; -1 = none. Owned
     // here (not in LfoDisplay) since it also drives chip highlighting and the ShapeManager

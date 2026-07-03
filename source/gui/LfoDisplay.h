@@ -54,6 +54,14 @@ public:
     // list; the editor wires this to ShapeManager::setNodes for the lane under edit.
     std::function<void (std::vector<lflow::ShapeNode>)> onNodesEdited;
 
+    // Phase 7 Task 3 (UX #1): fired at the START of every edit-mode mouse-down gesture (add,
+    // move-node, or bend-segment -- before any hit-testing/mutation happens), never on a plain
+    // click/drag when no lane is being edited. The editor wires this to
+    // undoManager.beginNewTransaction("Edit shape") so a WHOLE gesture -- possibly many
+    // onNodesEdited calls, one per drag frame, until the next mouse-down -- collapses into a
+    // single undo/redo step.
+    std::function<void()> onGestureStart;
+
     void paint (juce::Graphics&) override;
 
     void mouseDown (const juce::MouseEvent&) override;

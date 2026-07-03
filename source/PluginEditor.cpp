@@ -85,6 +85,11 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     setLookAndFeel (&lookAndFeel);
     auto& apvts = processorRef.getAPVTS();
 
+    // Phase 7 Task 3 (UX #1): makes the editor itself a valid keyboard-focus target, so Cmd-Z /
+    // Cmd-Shift-Z (keyPressed, below) always has somewhere to dispatch from -- see mouseDown's
+    // doc comment (header) for how focus actually lands here after a click.
+    setWantsKeyboardFocus (true);
+
     addAndMakeVisible (display);
     display.setTooltip ("When a lane is in edit mode (its chip highlighted): click empty space "
                          "to add a node, drag a node to move it, drag a segment vertically to "
@@ -92,7 +97,14 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     display.onNodesEdited = [this] (std::vector<lflow::ShapeNode> nodes)
     {
         if (editLane >= 0)
-            processorRef.getShapeManager().setNodes (editLane, std::move (nodes));
+            processorRef.getShapeManager().setNodes (editLane, std::move (nodes), &processorRef.getUndoManager());
+    };
+    // Phase 7 Task 3 (UX #1): one undo transaction per curve-editor gesture (see
+    // LfoDisplay::onGestureStart's doc comment) -- a whole node drag is many onNodesEdited
+    // calls but exactly one beginNewTransaction() call, so it undoes/redoes as one step.
+    display.onGestureStart = [this]
+    {
+        processorRef.getUndoManager().beginNewTransaction ("Edit shape");
     };
 
     for (int i = 0; i < 3; ++i)
@@ -125,6 +137,18 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     addAndMakeVisible (bypassButton);
     bypassAtt = std::make_unique<APVTS::ButtonAttachment> (apvts, lflow::pid::bypass, bypassButton);
 
+    // Phase 7 Task 3 (UX #1): momentary undo/redo pills. Enabled state is refreshed in
+    // timerCallback(); Component::setEnabled() itself early-outs when the value doesn't change,
+    // so no extra caching is needed here to keep the 60Hz refresh cheap.
+    undoButton.setTooltip ("Undo (Cmd-Z)");
+    redoButton.setTooltip ("Redo (Cmd-Shift-Z)");
+    undoButton.onClick = [this] { processorRef.getUndoManager().undo(); };
+    redoButton.onClick = [this] { processorRef.getUndoManager().redo(); };
+    undoButton.setEnabled (false);
+    redoButton.setEnabled (false);
+    addAndMakeVisible (undoButton);
+    addAndMakeVisible (redoButton);
+
     refreshEnablement();
     refreshXoverHint();
 
@@ -132,11 +156,43 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     setResizeLimits (620, 560, 1000, 900);
     setSize (700, 620);
     startTimerHz (60);
+
+    // Best-effort initial focus grab (Phase 7 Task 3) -- a no-op if the editor isn't showing
+    // yet at this point (grabKeyboardFocus() checks isShowing() internally and silently returns
+    // if not); mouseDown() below covers focus after the editor becomes visible and interactive.
+    grabKeyboardFocus();
 }
 
 LFlOwAudioProcessorEditor::~LFlOwAudioProcessorEditor()
 {
     setLookAndFeel (nullptr);
+}
+
+void LFlOwAudioProcessorEditor::mouseDown (const juce::MouseEvent&)
+{
+    // Only reached for clicks on the editor's own background (gaps between controls) -- clicks
+    // on a child control are routed straight to that child and never reach here (see the header
+    // doc comment).
+    grabKeyboardFocus();
+}
+
+bool LFlOwAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    auto& um = processorRef.getUndoManager();
+
+    if (key == juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0))
+    {
+        um.undo();
+        return true;
+    }
+
+    if (key == juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0))
+    {
+        um.redo();
+        return true;
+    }
+
+    return false;
 }
 
 void LFlOwAudioProcessorEditor::styleRotary (juce::Slider& s, int textBoxWidth, int textBoxHeight)
@@ -329,6 +385,11 @@ void LFlOwAudioProcessorEditor::timerCallback()
             display.setEditNodes (processorRef.getShapeManager().getNodes (editLane));
     }
 
+    // Phase 7 Task 3 (UX #1): cheap -- setEnabled() itself early-outs when unchanged.
+    auto& um = processorRef.getUndoManager();
+    undoButton.setEnabled (um.canUndo());
+    redoButton.setEnabled (um.canRedo());
+
     refreshEnablement();
     refreshXoverHint();
 }
@@ -508,6 +569,16 @@ void LFlOwAudioProcessorEditor::resized()
     // in this one line — see paint().
     auto headerLine = area.removeFromTop (32);
     bypassButton.setBounds (headerLine.removeFromRight (80).withSizeKeepingCentre (80, 24));
+
+    // Phase 7 Task 3 (UX #1): Undo/Redo pills, right of the brand lockup / left of Bypass. This
+    // fixed-width group (2 x 44px + 6+4px gaps = 98px, plus Bypass's 80px = 178px total) leaves
+    // well over 200px of the brand lockup's left-aligned, painted-not-laid-out text free even
+    // at the 620px resize floor (620 - 24 margin - 178 = 418px), so it never truncates.
+    headerLine.removeFromRight (6);
+    redoButton.setBounds (headerLine.removeFromRight (44).withSizeKeepingCentre (44, 22));
+    headerLine.removeFromRight (4);
+    undoButton.setBounds (headerLine.removeFromRight (44).withSizeKeepingCentre (44, 22));
+
     area.removeFromTop (4);
 
     // Footer (painted) claims its space first.

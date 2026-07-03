@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "ShapeModel.h"
 #include <cmath>
+#include <limits>
 
 using namespace lflow;
 using Catch::Matchers::WithinAbs;
@@ -138,4 +139,62 @@ TEST_CASE ("shapeTableValue: degenerate table (null/size<=0) is safe", "[shapemo
     float table[4] = { 0.0f, 1.0f, 2.0f, 3.0f };
     REQUIRE (shapeTableValue (nullptr, 4, 0.5f) == 0.0f);
     REQUIRE (shapeTableValue (table, 0, 0.5f) == 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 Task 1: bakeShapeTable defense-in-depth against non-finite/out-of-
+// range node fields (QA H2's suspected area -- getNodes/setStateInformation
+// reload paths don't clamp, so a NaN curve or Inf x reaching here must still
+// bake a finite, in-range table; see probe.cpp PROBE 7).
+// ---------------------------------------------------------------------------
+
+TEST_CASE ("bakeShapeTable: NaN curve, Inf x, and out-of-range y on a node all bake to a finite in-range table",
+           "[shapemodel][hardening][H2]")
+{
+    // curve=NaN on node 0 -> old code: pow(2, 3*NaN) = NaN propagated into
+    // every sample of that node's segment (H1's upstream root cause).
+    ShapeNode nodes[3] = {
+        { std::numeric_limits<float>::infinity(), -5.0f, std::numeric_limits<float>::quiet_NaN() },
+        { 0.5f, 1.0f, 0.0f },
+        { 1.0f, 0.0f, 0.0f }
+    };
+    float table[kShapeTableSize];
+    bakeShapeTable (nodes, 3, table, kShapeTableSize);
+
+    for (float v : table)
+    {
+        REQUIRE (std::isfinite (v));
+        REQUIRE (v >= -1e-5f);
+        REQUIRE (v <= 1.0f + 1e-5f);
+    }
+}
+
+TEST_CASE ("bakeShapeTable: a NaN curve alone (finite x/y) still bakes a finite table",
+           "[shapemodel][hardening][H2]")
+{
+    // Isolates the exact H2/probe-7 repro: curve=NaN with otherwise-sane nodes.
+    ShapeNode nodes[3] = { { 0.0f, 0.0f, std::numeric_limits<float>::quiet_NaN() },
+                           { 0.5f, 1.0f, 0.0f },
+                           { 1.0f, 0.0f, 0.0f } };
+    float table[kShapeTableSize];
+    bakeShapeTable (nodes, 3, table, kShapeTableSize);
+
+    for (float v : table)
+        REQUIRE (std::isfinite (v));
+}
+
+TEST_CASE ("bakeShapeTable: an out-of-range finite curve is clamped to [-1,1], not left raw",
+           "[shapemodel][hardening]")
+{
+    ShapeNode extremeHigh[2] = { { 0.0f, 0.0f, 500.0f }, { 1.0f, 1.0f, 0.0f } };
+    float tableHigh[kShapeTableSize];
+    bakeShapeTable (extremeHigh, 2, tableHigh, kShapeTableSize);
+    for (float v : tableHigh)
+        REQUIRE (std::isfinite (v));
+
+    ShapeNode extremeLow[2] = { { 0.0f, 0.0f, -500.0f }, { 1.0f, 1.0f, 0.0f } };
+    float tableLow[kShapeTableSize];
+    bakeShapeTable (extremeLow, 2, tableLow, kShapeTableSize);
+    for (float v : tableLow)
+        REQUIRE (std::isfinite (v));
 }

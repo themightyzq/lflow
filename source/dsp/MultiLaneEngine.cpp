@@ -55,6 +55,7 @@ void MultiLaneEngine::reset() noexcept
         lane.smoothL = lane.smoothR = 0.0f;
         lane.lastPhase = 0.0f;
         lane.lastValue = 0.0f;
+        lane.wasActive = false;
     }
 
     for (int c = 0; c < kNumBandChannels; ++c)
@@ -136,6 +137,16 @@ float MultiLaneEngine::onePole (float target, float& state) const noexcept
     const float tc = 0.0005f * static_cast<float> (sampleRate) * (s * s) + 1.0f;
     const float coeff = std::exp (-1.0f / tc);
     state = target + coeff * (state - target);
+
+    // Guard (Phase 7 Task 1 / QA H1 hardening): if the recursion above produced
+    // a non-finite state (e.g. a non-finite `target` fed in from a poisoned
+    // modulator -- see H1's custom-table repro), don't let it latch forever.
+    // Once `target` is finite again, snap straight to it (recovers within one
+    // sample of the modulator recovering); if `target` itself is still
+    // non-finite, fall back to 0 rather than propagate NaN/Inf downstream.
+    if (! std::isfinite (state))
+        state = std::isfinite (target) ? target : 0.0f;
+
     return state;
 }
 
@@ -148,11 +159,24 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
     bool   bandActive = false;
     bool   pitchActive = false;
 
+    // L1 hardening (spec A): true for a lane whose depth went 0 -> >0 as of
+    // THIS call, relative to its state at the end of the previous call. Used
+    // below to snap that lane's smoothL/R straight to the target on the first
+    // evaluated sample instead of gliding from a stale, time-elapsed value.
+    // Computed/updated unconditionally (even for lanes that stay inactive, and
+    // even on the all-lanes-inactive early-return path below) so a lane that
+    // sits out an entire block-gap is still tracked correctly for the NEXT
+    // reactivation.
+    bool activationEdge[kNumLanes];
+
     for (int i = 0; i < kNumLanes; ++i)
     {
         Lane& lane = lanes[i];
         active[i] = lane.params.depth > 0.0f;
         doPan[i]  = false;
+
+        activationEdge[i] = active[i] && ! lane.wasActive;
+        lane.wasActive = active[i];
 
         // Link lockstep fix (folded from Phase 2 final review): every lane's clock
         // rate and sync-phase-reset are computed/applied regardless of depth, so a
@@ -227,6 +251,20 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
 
     for (int n = 0; n < numSamples; ++n)
     {
+        // Input scrub (Phase 7 Task 1 / QA C1 hardening): non-finite host input
+        // must never reach a state-holding unit (band-split biquads, the pitch
+        // ModDelay's ring, or the onePole smoothers via the band/pitch gain
+        // paths) -- one non-finite sample used to latch the band filters' state
+        // NaN permanently, surviving even after the input fully recovered.
+        // Cheap: one isfinite comparison per sample per channel, before
+        // anything else in this loop looks at the buffer.
+        for (int c = 0; c < numChannels; ++c)
+        {
+            float& s = channels[c][n];
+            if (! std::isfinite (s))
+                s = 0.0f;
+        }
+
         float gainL = 1.0f;
         float gainR = 1.0f;
         float bandGain[3] = { 1.0f, 1.0f, 1.0f }; // Low, Mid, High (mono, applied to both channels)
@@ -240,7 +278,26 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
             float ph = static_cast<float> (lane.clock.getPhase()) + lane.params.phaseOffset;
             ph -= std::floor (ph);
 
-            const float modL = onePole (lane.lfo.valueAt (ph), lane.smoothL);
+            // L1 hardening: on this lane's inactive->active edge, the FIRST
+            // evaluated sample of the block (n==0 -- active[] is fixed for the
+            // whole call) snaps smoothL/R straight to the target instead of
+            // gliding from a stale, possibly long-frozen state (the clock keeps
+            // advancing while a lane sits at depth 0, per the lockstep fix
+            // above, so that stale state no longer corresponds to "now").
+            const bool snap = (n == 0) && activationEdge[i];
+
+            const float rawL = lane.lfo.valueAt (ph);
+            float modL;
+            if (snap)
+            {
+                lane.smoothL = rawL;
+                modL = rawL;
+            }
+            else
+            {
+                modL = onePole (rawL, lane.smoothL);
+            }
+
             const float depth = lane.params.depth;
             const float gL = 1.0f - depth * modL;
 
@@ -252,7 +309,17 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
                     {
                         float phR = ph + 0.5f;
                         phR -= std::floor (phR);
-                        const float modR = onePole (lane.lfoR.valueAt (phR), lane.smoothR);
+                        const float rawR = lane.lfoR.valueAt (phR);
+                        float modR;
+                        if (snap)
+                        {
+                            lane.smoothR = rawR;
+                            modR = rawR;
+                        }
+                        else
+                        {
+                            modR = onePole (rawR, lane.smoothR);
+                        }
                         gainR *= (1.0f - depth * modR);
                     }
                     else
@@ -337,6 +404,28 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
 
         for (int i = 0; i < kNumLanes; ++i)
             lanes[i].clock.advance (rates[i]);
+    }
+
+    // End-of-block state health sweep (Phase 7 Task 1 / QA C1+H1 hardening,
+    // spec A "guard the state"). Belt-and-suspenders on top of the per-sample
+    // input scrub above: catches any non-finite state that arose from
+    // something OTHER than a raw non-finite input sample slipping past the
+    // scrub (e.g. filter-coefficient/overflow edge cases on extreme-but-finite
+    // input). Once per block, not per sample -- branch-cheap (a handful of
+    // isfinite comparisons). ModDelay needs no equivalent sweep here: its own
+    // ring-write guard (see ModDelay::process) keeps its state finite directly.
+    if (bandActive)
+        for (int c = 0; c < kNumBandChannels; ++c)
+        {
+            lowSplit[c].flushIfNonFinite();
+            highSplit[c].flushIfNonFinite();
+        }
+
+    for (int i = 0; i < kNumLanes; ++i)
+    {
+        Lane& lane = lanes[i];
+        if (! std::isfinite (lane.smoothL)) lane.smoothL = 0.0f;
+        if (! std::isfinite (lane.smoothR)) lane.smoothR = 0.0f;
     }
 }
 

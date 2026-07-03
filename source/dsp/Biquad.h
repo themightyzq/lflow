@@ -33,6 +33,25 @@ public:
         z2 = 0.0f;
     }
 
+    // State health guard (Phase 7 Task 1 / QA C1 hardening). The engine scrubs
+    // non-finite input at its own boundary before this filter ever sees it (see
+    // MultiLaneEngine::process), so in normal operation z1/z2 never go non-finite
+    // in the first place. This is belt-and-suspenders defense-in-depth for any
+    // other path that could still drive the transposed-DF2 recursion non-finite
+    // (e.g. coefficient/overflow edge cases on extreme-but-finite input): if
+    // either state register has gone NaN/Inf, reset both to 0 rather than let
+    // the recursion feed it back forever. Cheap (two comparisons), no
+    // allocation -- intended to be called once per block (not per sample) by
+    // the engine's end-of-process health sweep.
+    void flushIfNonFinite() noexcept
+    {
+        if (! std::isfinite (z1) || ! std::isfinite (z2))
+        {
+            z1 = 0.0f;
+            z2 = 0.0f;
+        }
+    }
+
 private:
     void setCoeffs (double fcHz, double sampleRate, double q, bool lowpass) noexcept
     {

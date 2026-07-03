@@ -238,6 +238,39 @@ TEST_CASE ("ModDelay integer delay: exact alignment at the clamp boundaries (4 a
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 7 Task 1: ring-write NaN scrub (QA L3). ModDelay's delay-TIME argument
+// was already NaN-guarded (see the out-of-range-delaySamples test above), but
+// the raw input sample was written into the ring unscrubbed -- a NaN input
+// polluted the ring for ~ring-read-length before self-clearing (probe2.cpp
+// PROBE 3: recovered by block 8 of 400 @64 samples/block, but not
+// instantaneously). The ring write itself must scrub non-finite input so nothing
+// non-finite ever enters the ring buffer in the first place.
+// ---------------------------------------------------------------------------
+
+TEST_CASE ("ModDelay: a single NaN input sample never enters the ring (immediately finite reads at the same delay)",
+           "[moddelay][hardening][L3]")
+{
+    ModDelay d;
+    d.prepare (48000.0, 0.01); // capacity == 480
+
+    const float delaySamples = 100.5f;
+
+    for (int i = 0; i < 50; ++i)
+        REQUIRE (std::isfinite (d.process (0.2f, delaySamples)));
+
+    // The poisoned write itself may (legitimately) read back non-finite -- the
+    // input WAS non-finite for that one sample -- but old code kept writing
+    // that raw NaN into the ring, so reads that later reference that exact
+    // ring slot (any time in the next ~ring-length calls) still came back
+    // non-finite. New code scrubs the ring WRITE, so every read that depends
+    // on that slot from here on is finite immediately.
+    (void) d.process (std::nanf (""), delaySamples);
+
+    for (int i = 0; i < 600; ++i) // > capacity, guarantees every slot is re-visited
+        REQUIRE (std::isfinite (d.process (0.2f, delaySamples)));
+}
+
 TEST_CASE ("ModDelay re-prepare: resizes capacity and clears all prior state", "[moddelay]")
 {
     ModDelay d;

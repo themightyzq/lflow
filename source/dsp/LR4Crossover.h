@@ -42,6 +42,17 @@ public:
         hp2.reset();
     }
 
+    // Forwards the state health guard (see Biquad::flushIfNonFinite) to all 4
+    // internal biquads. The engine calls this once per block, only for engaged
+    // crossovers (Phase 7 Task 1 / QA C1 hardening).
+    void flushIfNonFinite() noexcept
+    {
+        lp1.flushIfNonFinite();
+        lp2.flushIfNonFinite();
+        hp1.flushIfNonFinite();
+        hp2.flushIfNonFinite();
+    }
+
 private:
     double sampleRate { 48000.0 };
     double frequency { 1000.0 };

@@ -63,6 +63,36 @@ inline void bakeShapeTable (const ShapeNode* nodes, int count, float* out, int o
     if (count > kMaxShapeNodes)
         count = kMaxShapeNodes;
 
+    // Defense-in-depth sanitization (Phase 7 Task 1 / QA H2 hardening): the
+    // reload path (setStateInformation of crafted/corrupt/old XML -> getNodes,
+    // which -- unlike setNodes -- does not clamp) can hand this function
+    // non-finite or out-of-range x/y/curve. A NaN curve alone propagates through
+    // std::pow into every sample of that node's segment (H1's upstream root
+    // cause); a non-finite x breaks the flat-extension/segment-scan comparisons
+    // below. Sanitize into a local, bounded (<=kMaxShapeNodes) stack copy before
+    // any of that logic runs -- stack-only, no allocation, message-thread-only
+    // (never called per audio sample). Non-finite x/y -> that field becomes 0
+    // (silence/neutral, and 0 keeps x a stable sort anchor at the start of the
+    // range); non-finite curve -> 0 (linear/no bend). Finite values are clamped
+    // to their valid range: x/y in [0,1], curve in [-1,1].
+    ShapeNode safeNodes[kMaxShapeNodes];
+    for (int k = 0; k < count; ++k)
+    {
+        const float rawX = nodes[k].x;
+        const float rawY = nodes[k].y;
+        const float rawCurve = nodes[k].curve;
+
+        const float x = std::isfinite (rawX) ? detail::clamp01 (rawX) : 0.0f;
+        const float y = std::isfinite (rawY) ? detail::clamp01 (rawY) : 0.0f;
+
+        float curve = std::isfinite (rawCurve) ? rawCurve : 0.0f;
+        if (curve < -1.0f) curve = -1.0f;
+        else if (curve > 1.0f) curve = 1.0f;
+
+        safeNodes[k] = { x, y, curve };
+    }
+    nodes = safeNodes; // everything below reads through `nodes`, now sanitized
+
     if (count == 1)
     {
         const float y = detail::clamp01 (nodes[0].y);

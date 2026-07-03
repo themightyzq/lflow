@@ -69,6 +69,13 @@ private:
 
         float lastPhase { 0.0f }; // last evaluated phase incl. offset, for the UI
         float lastValue { 0.0f }; // last smoothed L-mod value, for the UI
+
+        // Whether this lane was active (depth>0) as of the end of the previous
+        // process() call. Used to detect the inactive->active edge for the L1
+        // smoother-snap hardening fix (see process()): reactivating a lane
+        // snaps smoothL/R straight to the first target instead of gliding from
+        // a stale, time-elapsed value.
+        bool wasActive { false };
     };
 
     float onePole (float target, float& state) const noexcept;

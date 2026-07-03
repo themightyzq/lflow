@@ -67,7 +67,13 @@ public:
         if (! (d >= lo)) d = lo;   // catches NaN (comparison false) and below-range
         if (d > hi) d = hi;
 
-        buffer[static_cast<size_t> (writePos)] = in;
+        // Ring-write scrub (Phase 7 Task 1 / QA L3 hardening): a non-finite input
+        // sample must never enter the ring -- otherwise it sits there, poisoning
+        // every read whose Hermite window touches it, for up to ~ring-read-length
+        // calls before self-clearing (bounded, but not immediate). Storing 0.0f
+        // instead means nothing non-finite is ever written, so recovery is
+        // immediate rather than merely bounded.
+        buffer[static_cast<size_t> (writePos)] = std::isfinite (in) ? in : 0.0f;
 
         const double readPos = static_cast<double> (writePos) - d;
         const double idx1D = std::floor (readPos);

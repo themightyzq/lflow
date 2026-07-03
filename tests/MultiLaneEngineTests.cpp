@@ -5,6 +5,7 @@
 #include "ShapeModel.h"
 #include <vector>
 #include <cmath>
+#include <limits>
 
 using namespace lflow;
 using Catch::Matchers::WithinAbs;
@@ -826,4 +827,285 @@ TEST_CASE ("stereo band-split: decorrelated L/R (different-phase sines) still ga
     const double gatedRmsR = rmsRange (r, 1200, 3600);
     const double openRmsR  = rmsRange (r, 6000, 8400);
     REQUIRE (gatedRmsR < 0.10 * openRmsR);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 Task 1: DSP NaN/robustness hardening (QA C1, H1, L1, L3). Repro
+// recipes ported from the adversarial QA sweep's throwaway probes
+// (probe.cpp/probe2.cpp, archived at /tmp/qa-probes/ at review time) into
+// permanent regression tests. See docs/superpowers/specs/
+// 2026-07-03-lflow-phase7-hardening-tablestakes-design.md section A.
+// ---------------------------------------------------------------------------
+
+namespace {
+bool allFinite (const float* buf, int n)
+{
+    for (int i = 0; i < n; ++i)
+        if (! std::isfinite (buf[i]))
+            return false;
+    return true;
+}
+} // namespace
+
+TEST_CASE ("C1: a NaN block into a Low-band lane does not permanently poison the band filters",
+           "[multilane][hardening][C1]")
+{
+    MultiLaneEngine e; e.prepare (48000.0, 512); e.reset();
+    LaneParams p; p.dest = Dest::Low; p.depth = 0.5f; p.waveform = Waveform::Sine; p.rateHz = 2.0;
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    const int blockSize = 64;
+    std::vector<float> L (static_cast<size_t> (blockSize)), R (static_cast<size_t> (blockSize));
+    float* chans[2] = { L.data(), R.data() };
+
+    // One block of NaN (probe.cpp PROBE 1 recipe).
+    for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = std::nanf (""); R[static_cast<size_t> (i)] = std::nanf (""); }
+    e.process (chans, 2, blockSize);
+
+    // 10 clean sine blocks -- old code: permanently NaN forever after. New code
+    // must be finite from the 2nd clean block on (allowing the block that
+    // absorbs the bad input its own transient).
+    for (int blk = 0; blk < 10; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const float v = 0.1f * std::sin (0.1f * static_cast<float> (blk * blockSize + i));
+            L[static_cast<size_t> (i)] = v; R[static_cast<size_t> (i)] = v;
+        }
+        e.process (chans, 2, blockSize);
+
+        if (blk >= 1)
+        {
+            REQUIRE (allFinite (L.data(), blockSize));
+            REQUIRE (allFinite (R.data(), blockSize));
+        }
+    }
+}
+
+TEST_CASE ("C1: a single Inf sample into a Mid-band lane does not permanently poison the band filters",
+           "[multilane][hardening][C1]")
+{
+    MultiLaneEngine e; e.prepare (48000.0, 512); e.reset();
+    LaneParams p; p.dest = Dest::Mid; p.depth = 0.5f; p.waveform = Waveform::Sine; p.rateHz = 2.0;
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    const int blockSize = 64;
+    std::vector<float> L (static_cast<size_t> (blockSize), 0.1f), R (static_cast<size_t> (blockSize), 0.1f);
+    L[10] = std::numeric_limits<float>::infinity();
+    float* chans[2] = { L.data(), R.data() };
+    e.process (chans, 2, blockSize);
+
+    for (int blk = 0; blk < 10; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.1f; R[static_cast<size_t> (i)] = 0.1f; }
+        e.process (chans, 2, blockSize);
+
+        if (blk >= 1)
+        {
+            REQUIRE (allFinite (L.data(), blockSize));
+            REQUIRE (allFinite (R.data(), blockSize));
+        }
+    }
+}
+
+TEST_CASE ("C1: NaN fed while every lane is at depth 0 does not stop a later-activated band lane from being finite",
+           "[multilane][hardening][C1]")
+{
+    // The engine still "runs" (advances lane clocks) even when every lane is at
+    // depth 0 -- the reachability note in the QA finding ("poisons even while
+    // bypassed"). Verifies that path stays inert with respect to filter state.
+    MultiLaneEngine e; e.prepare (48000.0, 512); e.reset();
+    e.setLaneParams (0, LaneParams{});
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    const int blockSize = 64;
+    std::vector<float> L (static_cast<size_t> (blockSize)), R (static_cast<size_t> (blockSize));
+    float* chans[2] = { L.data(), R.data() };
+    for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = std::nanf (""); R[static_cast<size_t> (i)] = std::nanf (""); }
+    e.process (chans, 2, blockSize);
+
+    LaneParams p; p.dest = Dest::Low; p.depth = 0.7f; p.waveform = Waveform::Sine; p.rateHz = 2.0;
+    e.setLaneParams (0, p);
+
+    for (int blk = 0; blk < 5; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.2f; R[static_cast<size_t> (i)] = 0.2f; }
+        e.process (chans, 2, blockSize);
+        REQUIRE (allFinite (L.data(), blockSize));
+        REQUIRE (allFinite (R.data(), blockSize));
+    }
+}
+
+TEST_CASE ("H1: a NaN custom-table sample does not permanently latch the onePole smoother",
+           "[multilane][hardening][H1]")
+{
+    MultiLaneEngine e; e.prepare (48000.0, 64); e.reset();
+    LaneParams p;
+    p.dest = Dest::Volume;
+    p.depth = 0.5f;
+    p.waveform = Waveform::Custom;
+    p.rateHz = 20.0; // fast: sweeps many cycles per block, guarantees hitting the NaN sample
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.5f; // smoothing ON (H1 requires Smooth>0)
+    e.setGlobalParams (g);
+
+    static float tbl[kShapeTableSize];
+    for (float& v : tbl) v = 0.5f;
+    tbl[128] = std::nanf ("");
+    e.setCustomTable (0, tbl, kShapeTableSize);
+
+    const int blockSize = 64;
+    std::vector<float> L (static_cast<size_t> (blockSize), 0.2f), R (static_cast<size_t> (blockSize), 0.2f);
+    float* chans[2] = { L.data(), R.data() };
+
+    // Sweep across the NaN sample repeatedly (probe2.cpp PROBE 2 recipe).
+    for (int blk = 0; blk < 100; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.2f; R[static_cast<size_t> (i)] = 0.2f; }
+        e.process (chans, 2, blockSize);
+    }
+
+    // Swap to an all-finite table.
+    for (float& v : tbl) v = 0.5f;
+    e.setCustomTable (0, tbl, kShapeTableSize);
+
+    for (int blk = 0; blk < 2; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.2f; R[static_cast<size_t> (i)] = 0.2f; }
+        e.process (chans, 2, blockSize);
+    }
+    // Old code: still non-finite here (state permanently latched). New code:
+    // recovered within these 2 post-swap blocks.
+    REQUIRE (allFinite (L.data(), blockSize));
+    REQUIRE (allFinite (R.data(), blockSize));
+
+    // And it stays recovered -- not a one-block fluke.
+    for (int blk = 0; blk < 20; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.2f; R[static_cast<size_t> (i)] = 0.2f; }
+        e.process (chans, 2, blockSize);
+        REQUIRE (allFinite (L.data(), blockSize));
+        REQUIRE (allFinite (R.data(), blockSize));
+    }
+}
+
+TEST_CASE ("L3: a single NaN input sample into a Pitch lane recovers within 2 blocks (old code: ~8-9 blocks)",
+           "[multilane][hardening][L3]")
+{
+    MultiLaneEngine e; e.prepare (48000.0, 64); e.reset();
+    LaneParams p; p.dest = Dest::Pitch; p.depth = 0.5f; p.waveform = Waveform::Sine; p.rateHz = 2.0;
+    e.setLaneParams (0, p);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.0f;
+    e.setGlobalParams (g);
+
+    const int blockSize = 64;
+    std::vector<float> L (static_cast<size_t> (blockSize), 0.1f), R (static_cast<size_t> (blockSize), 0.1f);
+    L[0] = std::nanf ("");
+    float* chans[2] = { L.data(), R.data() };
+    e.process (chans, 2, blockSize);
+
+    for (int blk = 0; blk < 2; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.1f; R[static_cast<size_t> (i)] = 0.1f; }
+        e.process (chans, 2, blockSize);
+    }
+    REQUIRE (allFinite (L.data(), blockSize));
+    REQUIRE (allFinite (R.data(), blockSize));
+
+    // Stays clean afterward (bounded, self-healed permanently -- not permanent
+    // poisoning and not a relapse).
+    for (int blk = 0; blk < 20; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i) { L[static_cast<size_t> (i)] = 0.1f; R[static_cast<size_t> (i)] = 0.1f; }
+        e.process (chans, 2, blockSize);
+        REQUIRE (allFinite (L.data(), blockSize));
+        REQUIRE (allFinite (R.data(), blockSize));
+    }
+}
+
+TEST_CASE ("L1: reactivating a lane after a stale-state inactive stretch snaps straight to the target "
+           "(matches a fresh engine at the identical phase, no glide from stale state)",
+           "[multilane][hardening][L1]")
+{
+    // rateHz=1 @ sr=1000: 500 elapsed samples (200 primed-active + 300 inactive)
+    // land the clock's phase at EXACTLY 0.5 (500/1000), so a from-scratch "fresh"
+    // engine given phaseOffset=0.5 evaluates the identical target on its very
+    // first (also inactive->active edge) sample -- a clean, phase-matched oracle
+    // for "the target," with no history-replay needed.
+    const double sr = 1000.0;
+
+    LaneParams active;
+    active.waveform = Waveform::Sine;
+    active.dest = Dest::Volume;
+    active.rateHz = 1.0;
+    active.depth = 1.0f;
+    active.phaseOffset = 0.0f;
+
+    GlobalParams g; g.mix = 1.0f; g.smooth = 0.5f; // Smooth>0, per the L1 repro
+
+    // --- "test" engine: primed active (builds a stale, non-zero smoothL via the
+    // one-pole glide), then depth 0 for 300 samples (smoother frozen while the
+    // clock keeps advancing -- the lockstep fix), then reactivated.
+    MultiLaneEngine e; e.prepare (sr, 2048); e.reset();
+    e.setGlobalParams (g);
+    e.setLaneParams (0, active);
+    e.setLaneParams (1, LaneParams{});
+    e.setLaneParams (2, LaneParams{});
+
+    {
+        std::vector<float> buf (200, 1.0f);
+        float* chans[1] = { buf.data() };
+        e.process (chans, 1, 200); // prime: smoothL glides toward a HIGH-ish target
+    }
+
+    auto inactive = active; inactive.depth = 0.0f;
+    e.setLaneParams (0, inactive);
+    {
+        std::vector<float> buf (300, 1.0f);
+        float* chans[1] = { buf.data() };
+        e.process (chans, 1, 300); // depth 0: smoothL frozen stale, clock keeps ticking
+    }
+
+    e.setLaneParams (0, active); // reactivate
+    std::vector<float> testBuf (1, 1.0f);
+    float* testChans[1] = { testBuf.data() };
+    e.process (testChans, 1, 1);
+    const float testFirstValue = e.getLaneValue (0);
+
+    // --- "fresh" reference engine: never previously run (its own inactive->
+    // active edge is the implicit one from construction -- wasActive starts
+    // false), activated from sample 0 with a phaseOffset that lands it on the
+    // SAME phase the test engine reactivates at.
+    MultiLaneEngine fresh; fresh.prepare (sr, 2048); fresh.reset();
+    fresh.setGlobalParams (g);
+    auto freshActive = active; freshActive.phaseOffset = 0.5f;
+    fresh.setLaneParams (0, freshActive);
+    fresh.setLaneParams (1, LaneParams{});
+    fresh.setLaneParams (2, LaneParams{});
+
+    std::vector<float> freshBuf (1, 1.0f);
+    float* freshChans[1] = { freshBuf.data() };
+    fresh.process (freshChans, 1, 1);
+    const float freshFirstValue = fresh.getLaneValue (0);
+
+    // Old code: the test engine glides from its stale (primed) state, the fresh
+    // engine glides from its zero-initialized state -- different starting
+    // points, so they diverge (genuine RED). New code: both snap straight to
+    // the (identical) target on their inactive->active edge, so they match.
+    REQUIRE_THAT (testFirstValue, WithinAbs (freshFirstValue, 1e-6));
 }

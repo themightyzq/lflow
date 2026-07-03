@@ -407,8 +407,10 @@ void LfoDisplay::paint (juce::Graphics& g)
         else
         {
             rebuildPathIfNeeded (lane);
-            // Other lanes dim harder than usual while another lane is in edit mode.
-            const float alpha = (editLane >= 0) ? 0.12f : (lane.active ? 1.0f : 0.35f);
+            // Other lanes dim harder than usual while another lane is in edit mode. An inactive
+            // (depth == 0) lane otherwise renders at 0.55 alpha, not 0.35 -- finding #5: at 0.35
+            // it was effectively invisible, giving no clue lanes 2-3 existed.
+            const float alpha = (editLane >= 0) ? 0.12f : (lane.active ? 1.0f : 0.55f);
             g.setColour (colour.withAlpha (alpha));
             g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
         }
@@ -436,5 +438,26 @@ void LfoDisplay::paint (juce::Graphics& g)
             g.setColour (colour);
             g.fillEllipse (mx - 4.0f, my - 4.0f, 8.0f, 8.0f);
         }
+    }
+
+    // Edit-mode hint bar + lane tag (finding #3: the shape editor had no on-surface hint for
+    // its own interaction grammar). Painted last so it sits on top of the curves/markers above,
+    // clear of the curve area's usable space (a ~16px strip at the bottom, per the design spec)
+    // -- deliberately NOT folded into displayArea()/the transform above, since that geometry
+    // also drives hit-testing (nodeToScreen/findNodeNear/findSegmentNear) and must stay exactly
+    // as the mouse handlers expect it; this is a paint-time-only overlay.
+    if (editLane >= 0)
+    {
+        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+
+        g.setColour (juce::Colour (LFlOwLookAndFeel::laneColour (editLane)));
+        auto tagArea = juce::Rectangle<float> (r.getX() + 4.0f, r.getY() + 2.0f, 140.0f, 12.0f);
+        g.drawText ("editing Lane " + juce::String (editLane + 1), tagArea,
+                    juce::Justification::centredLeft, false);
+
+        g.setColour (juce::Colour (C::onSurfaceVariant));
+        auto hintArea = juce::Rectangle<float> (r.getX(), r.getBottom() - 14.0f, r.getWidth(), 12.0f);
+        g.drawText ("click: add   drag: move / bend   double-click: delete", hintArea,
+                    juce::Justification::centred, false);
     }
 }

@@ -38,12 +38,18 @@ private:
         // Highlights the chip while this lane is being edited.
         void setEditActive (bool active);
 
+        // Finding #5 (state legibility): while this lane follows Link, its chip fills grey
+        // instead of lane colour so the follower state reads at a glance, on top of the usual
+        // disabled-alpha dimming (setEnabled) already applied in refreshEnablement().
+        void setFollowing (bool following);
+
         std::function<void()> onClick;
 
     private:
         juce::uint32 colour { 0xffffffffu };
         int number { 1 };
         bool editActive { false };
+        bool isFollowing { false };
     };
 
     // One lane's worth of controls + attachments. Attachments always stay connected to their
@@ -53,6 +59,16 @@ private:
     {
         LaneChip chip;
         juce::Label nameLabel;
+
+        // Edit affordance (finding #3): a pill that appears in the SAME slot as nameLabel
+        // (they're mutually exclusive -- see refreshEnablement) only when this lane's effective
+        // waveform is Custom and it isn't a linked follower. Built as a ToggleButton (not a
+        // plain TextButton) so it reuses the pill LookAndFeel::drawToggleButton already
+        // established for Sync/Link (tickColourId fill when "on"/editing) rather than adding a
+        // second, one-off pill-drawing path for a literal TextButton. Driven manually
+        // (setClickingTogglesState(false)) through the SAME code path as the chip
+        // (onLaneChipClicked/setEditLane) -- see buildLaneStrip.
+        juce::ToggleButton editButton { "Edit" };
 
         juce::ComboBox waveformBox;
         juce::ToggleButton syncButton { "Sync" };
@@ -114,8 +130,18 @@ private:
     // wiring; LfoDisplay just renders/hit-tests whatever setEditLane/setEditNodes give it.
     int editLane { -1 };
 
-    // Cheap-compare cache so refreshXoverHint() only touches colours/tooltips on change.
-    int xoverHiClampedState { -1 }; // -1 = unknown (forces first apply), 0 = no, 1 = yes
+    // Last waveform index seen per lane's OWN combo (index-matched to LaneStrip), tracked so
+    // onWaveformSelected() can tell "just changed to Custom" from "already was Custom" --
+    // ComboBoxAttachment's parameter->UI sync path fires onChange too (JUCE calls it via
+    // sendNotificationSync), so onChange alone can't distinguish user selection from a state/
+    // preset reload. See onWaveformSelected()'s doc comment for the accepted trade-off.
+    lflow::Waveform lastWaveform[3] { lflow::Waveform::Sine, lflow::Waveform::Sine, lflow::Waveform::Sine };
+
+    // Cheap-compare cache so refreshXoverHint() only touches colours/tooltips on change. Encodes
+    // BOTH the clamped flag and the rounded effective Hz (0 = not clamped, else 1000000+Hz) so a
+    // still-clamped drag of Xover Lo (which moves the effective value without flipping the flag)
+    // still refreshes the tooltip text, not just the on/off transition.
+    int xoverHiClampedState { -1 }; // -1 = unknown (forces first apply)
 
     void buildLaneStrip (int laneIndex);
 
@@ -137,7 +163,18 @@ private:
     void setEditLane (int lane);
 
     // Chip click handler: no-op unless that lane's waveform is Custom, else toggles edit mode.
+    // Also the Edit/Done pill's click handler (buildLaneStrip) -- same gate, same effect.
     void onLaneChipClicked (int lane);
+
+    // Waveform combo onChange handler (finding #3's "selecting Custom auto-enters edit mode").
+    // Auto-enter rule chosen: fire only when the combo's selection actually CHANGES TO Custom
+    // (tracked via lastWaveform[lane], since onChange can't otherwise tell a user pick from a
+    // parameter-driven sync -- see lastWaveform's doc comment) and the lane isn't a linked
+    // follower and isn't already the edit lane. Accepted trade-off: a state/preset reload that
+    // restores a lane to Custom from a different prior value will also briefly auto-enter edit
+    // mode -- mildly surprising but harmless (the timerCallback watchdog exits edit mode again
+    // the instant that lane stops being effectively Custom or becomes a follower).
+    void onWaveformSelected (int lane);
 
     // Resolves lane `lane`'s EFFECTIVE waveform: when Link is on, lanes 1-2 follow lane 0's
     // waveform (the processor routes lane 0's table to followers), so a follower's own raw

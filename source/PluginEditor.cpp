@@ -45,7 +45,10 @@ void LFlOwAudioProcessorEditor::LaneChip::paint (juce::Graphics& g)
         g.setColour (juce::Colour (C::onSurface).withAlpha (alpha));
         g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 2.0f);
     }
-    g.setColour (juce::Colour (colour).withAlpha (alpha));
+    // Following a linked lane 1 (finding #5): grey fill instead of lane colour, ON TOP of the
+    // existing disabled-alpha dimming above -- the number stays legible either way.
+    const juce::uint32 fillColour = isFollowing ? C::onSurfaceVariant : colour;
+    g.setColour (juce::Colour (fillColour).withAlpha (alpha));
     g.fillRoundedRectangle (r.reduced (editActive ? 2.0f : 0.0f), 4.0f);
     g.setColour (juce::Colour (C::background).withAlpha (alpha));
     g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
@@ -63,6 +66,14 @@ void LFlOwAudioProcessorEditor::LaneChip::setEditActive (bool active)
     if (editActive == active)
         return;
     editActive = active;
+    repaint();
+}
+
+void LFlOwAudioProcessorEditor::LaneChip::setFollowing (bool following)
+{
+    if (isFollowing == following)
+        return;
+    isFollowing = following;
     repaint();
 }
 
@@ -155,6 +166,18 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.nameLabel.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     addAndMakeVisible (s.nameLabel);
 
+    // Edit pill (finding #3): shares the nameLabel's column/bounds (see layoutLaneStrip) and is
+    // mutually exclusive with it (refreshEnablement toggles setVisible on whichever applies) --
+    // this borrows real estate from an unlabeled, spec-free column instead of widening the
+    // strip's shared column layout (which WOULD risk the min-width no-truncation guarantee for
+    // the labeled WAVE/SYNC/RATE/PHASE/DEST/DEPTH columns). setClickingTogglesState(false): the
+    // pill's on/off state is driven by setEditLane, not by its own click (same as the chip).
+    s.editButton.setClickingTogglesState (false);
+    s.editButton.setColour (juce::ToggleButton::tickColourId, juce::Colour (colour));
+    s.editButton.setTooltip (laneName + ": draw this lane's shape");
+    s.editButton.onClick = [this, i] { onLaneChipClicked (i); };
+    addChildComponent (s.editButton); // hidden until refreshEnablement() shows it
+
     s.waveformBox.addItemList ({ "Sine", "Triangle", "Square", "Saw Up", "Saw Down", "Sample & Hold", "Custom" }, 1);
     s.divisionBox.addItemList ({ "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }, 1);
     s.rhythmBox.addItemList   ({ "Straight", "Dotted", "Triplet" }, 1);
@@ -195,6 +218,15 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.rateAtt     = std::make_unique<APVTS::SliderAttachment>   (apvts, ids.rateHz,   s.rateSlider);
     s.phaseAtt    = std::make_unique<APVTS::SliderAttachment>   (apvts, ids.phase,    s.phaseSlider);
     s.depthAtt    = std::make_unique<APVTS::SliderAttachment>   (apvts, ids.depth,    s.depthSlider);
+
+    // lastWaveform is seeded AFTER waveformAtt's construction (its sendInitialUpdate already
+    // synced the combo to whatever the processor's current/restored state holds) and onChange
+    // is hooked up AFTER that seed, so a plugin/state load that starts a lane on Custom does
+    // NOT read as "just changed to Custom" and auto-enter edit mode -- only a genuine later
+    // change fires onWaveformSelected. See onWaveformSelected()'s doc comment (header) for the
+    // auto-enter rule and its accepted trade-off.
+    lastWaveform[(size_t) i] = static_cast<lflow::Waveform> (s.waveformBox.getSelectedItemIndex());
+    s.waveformBox.onChange = [this, i] { onWaveformSelected (i); };
 }
 
 void LFlOwAudioProcessorEditor::refreshEnablement()
@@ -215,12 +247,27 @@ void LFlOwAudioProcessorEditor::refreshEnablement()
         // lane 1's sync, per the Phase 2 link-gangs-motion design.
         const bool effectiveSync = link ? lane1Sync : (raw (s.syncId) > 0.5f);
 
+        // A linked follower (lanes 2-3 while Link is on) is exactly !motionEnabled here.
+        const bool isFollower = ! motionEnabled;
+
         s.waveformBox.setEnabled (motionEnabled);
         s.syncButton.setEnabled (motionEnabled);
         // Mirrors waveformBox/syncButton: a linked follower's chip is a dead affordance (its
         // own edit mode can never open, see onLaneChipClicked/effectiveWaveform), so grey it
         // out visibly instead of leaving it clickable-but-inert.
         s.chip.setEnabled (motionEnabled);
+        // Finding #5: grey fill (not just dimmed lane colour) while following, so the Link
+        // relationship reads at a glance rather than requiring the user to notice a subtle
+        // alpha difference.
+        s.chip.setFollowing (isFollower);
+
+        // Edit pill (finding #3): visible only when this lane's EFFECTIVE waveform is Custom
+        // and it isn't a linked follower (a follower's own Custom shape, if any, isn't what's
+        // playing -- entering its editor would silently edit a hidden shape, same gate as
+        // onLaneChipClicked). Mutually exclusive with nameLabel -- they share one column.
+        const bool showEdit = ! isFollower && effectiveWaveform (i) == lflow::Waveform::Custom;
+        s.editButton.setVisible (showEdit);
+        s.nameLabel.setVisible (! showEdit);
 
         s.rateSlider.setEnabled (motionEnabled && ! effectiveSync);
         s.rateSlider.setVisible (! effectiveSync);
@@ -306,7 +353,16 @@ void LFlOwAudioProcessorEditor::setEditLane (int lane)
 
     editLane = lane;
     for (int i = 0; i < 3; ++i)
-        laneStrips[(size_t) i].chip.setEditActive (i == editLane);
+    {
+        auto& s = laneStrips[(size_t) i];
+        const bool active = (i == editLane);
+        s.chip.setEditActive (active);
+        // Edit pill mirrors the chip exactly (same gate, same toggle) -- "Done" + lane-colour
+        // fill while this lane is being edited, "Edit" otherwise (see drawToggleButton's
+        // on-state using tickColourId, set to this lane's colour in buildLaneStrip).
+        s.editButton.setToggleState (active, juce::dontSendNotification);
+        s.editButton.setButtonText (active ? "Done" : "Edit");
+    }
 
     display.setEditLane (editLane);
     if (editLane >= 0)
@@ -331,17 +387,46 @@ void LFlOwAudioProcessorEditor::onLaneChipClicked (int lane)
     setEditLane (lane);
 }
 
+void LFlOwAudioProcessorEditor::onWaveformSelected (int lane)
+{
+    auto& s = laneStrips[(size_t) lane];
+    const auto newWaveform = static_cast<lflow::Waveform> (s.waveformBox.getSelectedItemIndex());
+    const bool changedToCustom = newWaveform == lflow::Waveform::Custom
+                                  && lastWaveform[(size_t) lane] != lflow::Waveform::Custom;
+    lastWaveform[(size_t) lane] = newWaveform;
+
+    if (! changedToCustom || lane == editLane)
+        return;
+
+    // Linked followers can't enter edit mode (their own Custom shape, if any, isn't what's
+    // playing -- see onLaneChipClicked's identical gate).
+    const bool link = processorRef.getAPVTS().getRawParameterValue (lflow::pid::link)->load() > 0.5f;
+    if (link && lane != 0)
+        return;
+
+    setEditLane (lane);
+}
+
 void LFlOwAudioProcessorEditor::refreshXoverHint()
 {
     auto& apvts = processorRef.getAPVTS();
     const float low  = apvts.getRawParameterValue (lflow::pid::xoverLow)->load();
     const float high = apvts.getRawParameterValue (lflow::pid::xoverHigh)->load();
     const bool clamped = high < low * 1.25f;
+    // Mirrors MultiLaneEngine::setXoverLow/setXoverHigh's own clamp formula (source/dsp/
+    // MultiLaneEngine.cpp) so the tooltip's "effective" Hz always matches what's actually
+    // playing -- this is a display-only mirror, not a second source of truth for the engine.
+    const float effective = juce::jmax (high, low * 1.25f);
+    const int effectiveHz = juce::roundToInt (effective);
 
-    const int clampedNow = clamped ? 1 : 0;
-    if (clampedNow == xoverHiClampedState)
+    // STANDARDS-CLEAN choice (documented per Task 3 brief): the slider's own textFromValue
+    // formatting stays untouched (single-source: the APVTS stringFromValue lambda remains the
+    // only place that formats this parameter's displayed value, for hosts and editor alike) --
+    // only the existing tint and the tooltip text change. The tooltip is made dynamic instead.
+    const int stateKey = clamped ? (1000000 + effectiveHz) : 0;
+    if (stateKey == xoverHiClampedState)
         return;
-    xoverHiClampedState = clampedNow;
+    xoverHiClampedState = stateKey;
 
     using C = LFlOwLookAndFeel::Colors;
     const auto colour = juce::Colour (clamped ? C::onSurfaceVariant : C::onSurface);
@@ -350,7 +435,7 @@ void LFlOwAudioProcessorEditor::refreshXoverHint()
 
     juce::String tip = "Crossover between the Mid and High bands";
     if (clamped)
-        tip += " (clamped by Low crossover)";
+        tip << " (clamped by Low crossover - effective " << effectiveHz << " Hz)";
     xoverHighSlider.setTooltip (tip);
 }
 
@@ -557,7 +642,11 @@ void LFlOwAudioProcessorEditor::layoutLaneStrip (int i, juce::Rectangle<int> row
     };
 
     s.chip.setBounds (placeFlat (laneGrid.chip, 18));
-    s.nameLabel.setBounds (placeFlat (laneGrid.name, laneGrid.name.w));
+    // editButton shares nameLabel's exact bounds -- only one of the two is ever visible
+    // (refreshEnablement), so there is no layout cost to reserving this slot for both.
+    const auto nameBounds = placeFlat (laneGrid.name, laneGrid.name.w);
+    s.nameLabel.setBounds (nameBounds);
+    s.editButton.setBounds (nameBounds);
     s.waveformBox.setBounds (placeFlat (laneGrid.wave, laneGrid.wave.w));
     s.syncButton.setBounds (placeFlat (laneGrid.sync, laneGrid.sync.w));
 

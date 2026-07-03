@@ -50,6 +50,15 @@ public:
     // by x (ShapeManager's own contract).
     void setEditNodes (const std::vector<lflow::ShapeNode>& nodes);
 
+    // Phase 7 Task 6 (UX #9): while bypassed, every lane's curve + its live marker render at a
+    // flat 40% alpha multiplier (on top of whatever alpha that lane would otherwise use --
+    // active/inactive/edit-mode dimming all still apply underneath) and a small "BYPASSED" tag
+    // is painted top-right. Markers keep animating (by design -- the processor keeps advancing
+    // phase while bypassed, only the audio path is bypassed), so this is display-only, no
+    // change to setLanePosition's feed. Compare-guarded: the editor's timerCallback calls this
+    // every tick, so a no-op call here must not force a repaint.
+    void setBypassed (bool bypassed);
+
     // Fired once per committed mouse-edit (add/move/bend/delete) with the full updated node
     // list; the editor wires this to ShapeManager::setNodes for the lane under edit.
     std::function<void (std::vector<lflow::ShapeNode>)> onNodesEdited;
@@ -134,6 +143,9 @@ private:
     float editTable[lflow::kShapeTableSize] {};
     juce::Path editPath;
     bool editPathDirty { true };
+
+    // Phase 7 Task 6 (UX #9): see setBypassed's doc comment above.
+    bool bypassed { false };
 
     int dragNodeIndex { -1 };
     int dragSegmentIndex { -1 };

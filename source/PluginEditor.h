@@ -119,6 +119,14 @@ private:
     };
     LaneGridLayout laneGrid;
 
+    // Phase 7 Task 6 (UX #6): each lane's FULL nameLabel rectangle as laid out by
+    // layoutLaneStrip() (same slot editButton shares). refreshEnablement() trims this from the
+    // left for a following lane (isFollower) so the "L1" badge painted just right of the chip
+    // (see paint()) has room without overlapping "Lane N" text; a non-follower gets the full
+    // rect back. Stored here (not recomputed) so refreshEnablement doesn't need resized()'s
+    // column math.
+    juce::Rectangle<int> laneNameBounds[3];
+
     // Divider + "BANDS" micro-label painted over the global row's crossover group (finding
     // #8's grouping), computed in resized() and painted in paint().
     struct GlobalRowLayout
@@ -192,6 +200,30 @@ private:
     // still refreshes the tooltip text, not just the on/off transition.
     int xoverHiClampedState { -1 }; // -1 = unknown (forces first apply)
 
+    // Phase 7 Task 6 (UX #7 + opp #5): band-knob emphasis. -1 = unknown (forces first apply),
+    // else 0/1 = no/some band lane live (dest in {Low,Mid,High} AND depth > 0). Drives
+    // Xover Lo/Hi's + their labels' Component::setAlpha (still fully draggable/enabled -- alpha
+    // only, no setEnabled) and bandsCaptionQuiet below, refreshed each timer tick via
+    // refreshBandEmphasis(), compare-guarded so an unchanged state never touches alpha/repaints.
+    int bandsLiveState { -1 };
+
+    // Read by paint() to alpha the painted "BANDS" micro-label (not a Component, so it can't use
+    // setAlpha -- this flag is the paint-time equivalent, kept in lockstep with bandsLiveState by
+    // refreshBandEmphasis()).
+    bool bandsCaptionQuiet { true };
+
+    // Phase 7 Task 6 (UX #6 + opp #5): per-lane follower state ("ganged to Lane 1"), tracked so
+    // the "L1" badge painted next to a following lane's chip (in this editor's own paint(), using
+    // that lane's chip's actual bounds) only triggers a repaint() on a genuine transition, not
+    // every timer tick. Updated in refreshEnablement() (which already computes this per lane).
+    bool laneFollowing[3] { false, false, false };
+
+    // Phase 7 Task 6 (UX #5): per-lane Dest index last used to set that lane's Depth-slider
+    // tooltip (0=Volume..5=Pitch, see destChoices in ParameterLayout.cpp) -- -1 forces the first
+    // apply. Compare-guards refreshDepthTooltip() so an unchanged Dest never touches the tooltip
+    // string every tick.
+    int lastDepthTooltipDest[3] { -1, -1, -1 };
+
     void buildLaneStrip (int laneIndex);
 
     // Phase 7 Task 4 (UX #2) preset bar plumbing. buildPresetBar() = ctor setup;
@@ -258,6 +290,20 @@ private:
     // Folded Phase 3 item: tints the Xover Hi label/readout and extends its tooltip when the
     // engine is clamping it against xoverLow*1.25 (see MultiLaneEngine/xover clamp behaviour).
     void refreshXoverHint();
+
+    // Phase 7 Task 6 (UX #7 + opp #5): sets Xover Lo/Hi + their labels to 50% alpha (present,
+    // quiet, still fully draggable) when no lane has a band destination (Low/Mid/High) with
+    // depth > 0, full alpha when one does; also updates bandsCaptionQuiet for paint()'s painted
+    // "BANDS" micro-label. Compare-guarded via bandsLiveState. Called from timerCallback().
+    void refreshBandEmphasis();
+
+    // Phase 7 Task 6 (UX #5): sets lane `lane`'s Depth slider tooltip to a destination-aware
+    // string (Volume/Pan/Low/Mid/High/Pitch each read differently -- see .cpp for the exact
+    // copy) when that lane's Dest actually changed since the last call (lastDepthTooltipDest
+    // compare-guard). Called once per lane from timerCallback() and once from buildLaneStrip()
+    // (seeded with that lane's initial Dest) so the tooltip is never stale between construction
+    // and the first timer tick.
+    void refreshDepthTooltip (int lane);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFlOwAudioProcessorEditor)
 };

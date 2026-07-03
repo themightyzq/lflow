@@ -391,6 +391,23 @@ void LFlOwAudioProcessorEditor::styleRotary (juce::Slider& s, int textBoxWidth, 
 {
     s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, textBoxHeight);
+
+    // Phase 7 Task 6 (UX #10 root-cause fix): JUCE's Slider only copies
+    // Slider::textBoxTextColourId into its internal value-box Label when something explicitly
+    // triggers that sync AFTER the text box exists (Component::setColour -> colourChanged() ->
+    // Slider's own copy-into-valueBox). Declaring the colour on the LookAndFeel itself
+    // (LFlOwLookAndFeel's ctor) is NOT enough on its own -- every rotary here was silently
+    // falling back to JUCE's stock white default (0xffffffff) instead of the intended
+    // onSurfaceVariant, confirmed by pixel-sampling a built standalone: Mix "100%", Smooth
+    // "15%", and Xover Lo "250 Hz" all rendered pure white (255,255,255), while Xover Hi's
+    // "2500 Hz" was the ONE exception at the correct dim onSurfaceVariant (144,143,156) -- purely
+    // because refreshXoverHint() happens to call setColour() on that one slider for an unrelated
+    // reason (its clamp/amber tint). That accident is what made Xover Hi look "dimmer than Xover
+    // Lo" (finding #10): Hi was actually the only CORRECTLY styled readout; every other one,
+    // including Lo, was an un-styled stock-white outlier. Fix: force the same explicit sync
+    // here, for every rotary, so Lo's baseline now matches Hi's already-correct unclamped state
+    // pixel-for-pixel (refreshXoverHint's clamped/amber override on Hi is unaffected).
+    s.setColour (juce::Slider::textBoxTextColourId, juce::Colour (LFlOwLookAndFeel::Colors::onSurfaceVariant));
 }
 
 void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
@@ -442,6 +459,9 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     // Lane knobs (and now the Rate slider's fill) carry lane identity (the LnF default fill
     // is primary, reserved for global controls) — see drawLinearSlider/drawRotarySlider.
     s.rateSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
+    // Same root-cause fix as styleRotary() (UX #10) -- this Slider's text box needs the same
+    // explicit sync or its readout silently renders JUCE's stock white instead of onSurfaceVariant.
+    s.rateSlider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (LFlOwLookAndFeel::Colors::onSurfaceVariant));
     addAndMakeVisible (s.rateSlider);
 
     styleRotary (s.phaseSlider, 40, 14);
@@ -462,11 +482,15 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.waveformBox.setTooltip (laneName + ": shape of the LFO motion");
     s.syncButton.setTooltip  (laneName + ": lock this lane's speed to host tempo");
     s.rateSlider.setTooltip  (laneName + ": LFO speed in Hz when Sync is off");
-    s.divisionBox.setTooltip (laneName + ": note value per LFO cycle when Sync is on");
+    // Phase 7 Task 6 (UX #8): sync BPM-fallback hint appended to the existing copy (ASCII).
+    s.divisionBox.setTooltip (laneName + ": note value per LFO cycle when Sync is on. "
+                              "Synced to host tempo; 120 BPM fallback when no host transport "
+                              "(e.g. standalone).");
     s.rhythmBox.setTooltip   (laneName + ": straight, dotted, or triplet feel for the synced rate");
     s.phaseSlider.setTooltip (laneName + ": phase offset in degrees, relative to the other lanes");
     s.destBox.setTooltip     (laneName + ": what this lane modulates, Volume, Pan, a frequency band, or Pitch");
-    s.depthSlider.setTooltip (laneName + ": how strongly this lane affects the signal");
+    // Depth's tooltip is destination-aware (UX #5) -- seeded below via refreshDepthTooltip(),
+    // once destAtt exists, so it reads the lane's real initial Dest rather than a hardcoded guess.
 
     s.waveformAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids.waveform, s.waveformBox);
     s.divisionAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids.division, s.divisionBox);
@@ -485,6 +509,11 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     // auto-enter rule and its accepted trade-off.
     lastWaveform[(size_t) i] = static_cast<lflow::Waveform> (s.waveformBox.getSelectedItemIndex());
     s.waveformBox.onChange = [this, i] { onWaveformSelected (i); };
+
+    // Phase 7 Task 6 (UX #5): seeds this lane's Depth tooltip from its real initial Dest (now
+    // that destAtt has synced destBox) rather than a hardcoded guess; timerCallback() keeps it
+    // current thereafter.
+    refreshDepthTooltip (i);
 }
 
 void LFlOwAudioProcessorEditor::refreshEnablement()
@@ -519,6 +548,16 @@ void LFlOwAudioProcessorEditor::refreshEnablement()
         // alpha difference.
         s.chip.setFollowing (isFollower);
 
+        // Phase 7 Task 6 (UX #6 + opp #5): the "L1" badge is painted in THIS editor's own
+        // paint() (next to the chip's own bounds), not inside LaneChip itself, so a follow-state
+        // change needs its own compare-guarded repaint() trigger -- setFollowing() above only
+        // repaints the chip component, not the editor.
+        if (laneFollowing[(size_t) i] != isFollower)
+        {
+            laneFollowing[(size_t) i] = isFollower;
+            repaint();
+        }
+
         // Edit pill (finding #3): visible only when this lane's EFFECTIVE waveform is Custom
         // and it isn't a linked follower (a follower's own Custom shape, if any, isn't what's
         // playing -- entering its editor would silently edit a hidden shape, same gate as
@@ -526,6 +565,11 @@ void LFlOwAudioProcessorEditor::refreshEnablement()
         const bool showEdit = ! isFollower && effectiveWaveform (i) == lflow::Waveform::Custom;
         s.editButton.setVisible (showEdit);
         s.nameLabel.setVisible (! showEdit);
+        // Phase 7 Task 6 (UX #6): make room for the "L1" badge (painted in this editor's own
+        // paint(), just right of the chip) by trimming the name label's left edge only while
+        // following -- see laneNameBounds' doc comment (header).
+        s.nameLabel.setBounds (isFollower ? laneNameBounds[(size_t) i].withTrimmedLeft (14)
+                                           : laneNameBounds[(size_t) i]);
 
         s.rateSlider.setEnabled (motionEnabled && ! effectiveSync);
         s.rateSlider.setVisible (! effectiveSync);
@@ -558,6 +602,10 @@ void LFlOwAudioProcessorEditor::timerCallback()
 
         display.setLane (i, waveform, phaseDeg / 360.0f, depth > 0.0f);
         display.setLanePosition (i, processorRef.getLanePhase (i), processorRef.getLaneValue (i));
+
+        // Phase 7 Task 6 (UX #5): dest-aware Depth tooltip, refreshed only when this lane's
+        // Dest actually changed (compare-guard lives inside refreshDepthTooltip itself).
+        refreshDepthTooltip (i);
 
         // Non-edited Custom lanes must render their REAL drawn shape, not LfoCore's Sine
         // fallback (LfoCore has no table for Waveform::Custom). Linked followers (i > 0
@@ -603,6 +651,11 @@ void LFlOwAudioProcessorEditor::timerCallback()
 
     refreshEnablement();
     refreshXoverHint();
+    refreshBandEmphasis();
+
+    // Phase 7 Task 6 (UX #9): display dimming + "BYPASSED" tag; compare-guarded inside
+    // LfoDisplay::setBypassed itself, so this cheap read+call is safe every tick.
+    display.setBypassed (raw (lflow::pid::bypass) > 0.5f);
 }
 
 lflow::Waveform LFlOwAudioProcessorEditor::effectiveWaveform (int lane) const
@@ -788,6 +841,71 @@ void LFlOwAudioProcessorEditor::refreshXoverHint()
     xoverHighSlider.setTooltip (tip);
 }
 
+void LFlOwAudioProcessorEditor::refreshBandEmphasis()
+{
+    auto& apvts = processorRef.getAPVTS();
+    auto raw = [&apvts] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+
+    // Dest indices per destChoices in ParameterLayout.cpp: 0 Volume, 1 Pan, 2 Low, 3 Mid,
+    // 4 High, 5 Pitch -- 2/3/4 are the band destinations the Xover knobs actually affect.
+    bool anyBandLive = false;
+    for (int i = 0; i < 3 && ! anyBandLive; ++i)
+    {
+        const auto& ids = laneIds[i];
+        const int destIndex = (int) raw (ids.dest);
+        const bool isBandDest = destIndex >= 2 && destIndex <= 4;
+        anyBandLive = isBandDest && raw (ids.depth) > 0.0f;
+    }
+
+    const int state = anyBandLive ? 1 : 0;
+    if (state == bandsLiveState)
+        return;
+    bandsLiveState = state;
+
+    // Present-but-quiet at 50% when idle, full when a band lane is live -- component alpha only
+    // (NOT setEnabled), so the knobs stay fully draggable either way (spec requirement).
+    const float alpha = anyBandLive ? 1.0f : 0.5f;
+    xoverLowSlider.setAlpha (alpha);
+    xoverHighSlider.setAlpha (alpha);
+    xoverLowLabel.setAlpha (alpha);
+    xoverHighLabel.setAlpha (alpha);
+
+    // The painted "BANDS" micro-label isn't a Component (it's drawn directly in paint()), so it
+    // can't use setAlpha -- this flag is the paint-time equivalent, applied there.
+    bandsCaptionQuiet = ! anyBandLive;
+    repaint();
+}
+
+void LFlOwAudioProcessorEditor::refreshDepthTooltip (int lane)
+{
+    if (lane < 0 || lane >= 3)
+        return;
+
+    auto& apvts = processorRef.getAPVTS();
+    const auto& ids = laneIds[lane];
+    const int destIndex = (int) apvts.getRawParameterValue (ids.dest)->load();
+
+    if (destIndex == lastDepthTooltipDest[(size_t) lane])
+        return;
+    lastDepthTooltipDest[(size_t) lane] = destIndex;
+
+    const juce::String laneName = "Lane " + juce::String (lane + 1);
+    juce::String tip;
+    // Dest indices per destChoices in ParameterLayout.cpp: 0 Volume, 1 Pan, 2 Low, 3 Mid,
+    // 4 High, 5 Pitch.
+    switch (destIndex)
+    {
+        case 0:  tip = laneName + ": Tremolo depth"; break;
+        case 1:  tip = laneName + ": Auto-pan width"; break;
+        case 2:  tip = laneName + ": Band pulse depth (Low band)"; break;
+        case 3:  tip = laneName + ": Band pulse depth (Mid band)"; break;
+        case 4:  tip = laneName + ": Band pulse depth (High band)"; break;
+        default: tip = laneName + ": Vibrato depth (wobble amount scales with rate)"; break; // Pitch
+    }
+
+    laneStrips[(size_t) lane].depthSlider.setTooltip (tip);
+}
+
 void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
 {
     using C = LFlOwLookAndFeel::Colors;
@@ -836,7 +954,32 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (juce::Colour (C::outline));
     g.fillRect (globalGrid.dividerLine);
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
+    // Phase 7 Task 6 (UX #7 + opp #5): quiet (50%) when no lane has a band destination with
+    // depth > 0, matching the Xover Lo/Hi knobs' own setAlpha (refreshBandEmphasis) -- this
+    // caption is paint()-drawn text, not a Component, so it needs its own alpha here rather
+    // than setAlpha.
+    g.setColour (juce::Colour (C::outline).withAlpha (bandsCaptionQuiet ? 0.5f : 1.0f));
     g.drawText ("BANDS", globalGrid.bandsLabel, juce::Justification::centred, false);
+
+    // Phase 7 Task 6 (UX #6 + opp #5): "L1" badge, lane-1 pink, immediately right of a
+    // following lane's chip -- "ganged to Lane 1" at a glance instead of a flat grey-out (the
+    // tooltip on the chip itself still spells out exactly what stays per-lane). Uses the
+    // chip's own actual bounds (already laid out in layoutLaneStrip/computeLaneColumns) rather
+    // than recomputing geometry here.
+    g.setFont (juce::Font (juce::FontOptions (8.0f).withStyle ("Bold")));
+    for (int i = 0; i < 3; ++i)
+    {
+        if (! laneFollowing[(size_t) i])
+            continue;
+
+        // Sized to fit the 14px gap refreshEnablement() trims from the name label's left edge
+        // for a following lane, so "L1" and "Lane N" never overlap.
+        auto chipBounds = laneStrips[(size_t) i].chip.getBounds();
+        juce::Rectangle<int> badgeArea (chipBounds.getRight() + 1, chipBounds.getY(),
+                                         14, chipBounds.getHeight());
+        g.setColour (juce::Colour (LFlOwLookAndFeel::Colors::lane0)); // lane 1's pink
+        g.drawText ("L1", badgeArea, juce::Justification::centred, false);
+    }
 
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
@@ -1027,6 +1170,7 @@ void LFlOwAudioProcessorEditor::layoutLaneStrip (int i, juce::Rectangle<int> row
     // editButton shares nameLabel's exact bounds -- only one of the two is ever visible
     // (refreshEnablement), so there is no layout cost to reserving this slot for both.
     const auto nameBounds = placeFlat (laneGrid.name, laneGrid.name.w);
+    laneNameBounds[(size_t) i] = nameBounds; // Phase 7 Task 6 (UX #6): see header doc comment.
     s.nameLabel.setBounds (nameBounds);
     s.editButton.setBounds (nameBounds);
     s.waveformBox.setBounds (placeFlat (laneGrid.wave, laneGrid.wave.w));

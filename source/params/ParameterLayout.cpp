@@ -16,6 +16,19 @@ const StringArray divisionChoices { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32" }
 const StringArray rhythmChoices   { "Straight", "Dotted", "Triplet" };
 const StringArray destChoices     { "Volume", "Pan", "Low", "Mid", "High", "Pitch" };
 
+// Phase 7 Task 6 (new bug found in Task 4): every %-formatted param (depth x3, mix, smooth)
+// had a withStringFromValueFunction (0..1 -> "NN%") but no matching withValueFromStringFunction,
+// so typed text entry fell back to AudioParameterFloat's DEFAULT parser -- range.convertTo0to1
+// (text.getFloatValue()) -- which reads the raw 0..1 NORMALISED range, not the displayed percent.
+// Typing "70" parsed as the literal value 70.0, which convertTo0to1 clamps to this range's max
+// (1.0), landing on 100% instead of 70%. Fix: parse the leading number (String::getFloatValue()
+// already stops at the first non-numeric character, so "70", "70%", and "70 %" all parse to
+// 70.0f the same way), divide by 100, clamp to [0,1].
+float percentTextToNormalised (const String& text)
+{
+    return jlimit (0.0f, 1.0f, text.trim().getFloatValue() / 100.0f);
+}
+
 // Adds the 8 lane-indexed parameters for one lane. destDefault/depthDefault vary per lane
 // per the Phase 2 defaults (lane1 Volume @ 50%; lane2 Pan @ 0%; lane3 Volume @ 0%).
 void addLaneParams (AudioProcessorValueTreeState::ParameterLayout& layout,
@@ -52,7 +65,8 @@ void addLaneParams (AudioProcessorValueTreeState::ParameterLayout& layout,
         ParameterID { depthId, 2 }, namePrefix + " Depth",
         NormalisableRange<float> (0.0f, 1.0f, 0.01f), depthDefault,
         AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })
+            .withValueFromStringFunction (percentTextToNormalised)));
 
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { destId, 2 }, namePrefix + " Dest", destChoices, destDefault));
@@ -100,13 +114,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         ParameterID { pid::mix, 2 }, "Mix",
         NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f,
         AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })
+            .withValueFromStringFunction (percentTextToNormalised)));
 
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { pid::smooth, 2 }, "Smooth",
         NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.15f,
         AudioParameterFloatAttributes()
-            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })));
+            .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })
+            .withValueFromStringFunction (percentTextToNormalised)));
 
     return layout;
 }

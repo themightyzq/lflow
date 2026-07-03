@@ -85,6 +85,14 @@ void LfoDisplay::setEditNodes (const std::vector<lflow::ShapeNode>& nodes)
     repaint();
 }
 
+void LfoDisplay::setBypassed (bool b)
+{
+    if (bypassed == b)
+        return;
+    bypassed = b;
+    repaint();
+}
+
 void LfoDisplay::rebakeEditTable()
 {
     lflow::bakeShapeTable (editNodes.empty() ? nullptr : editNodes.data(),
@@ -460,11 +468,18 @@ void LfoDisplay::paint (juce::Graphics& g)
         editPathDirty = false;
     }
 
+    // Phase 7 Task 6 (UX #9): flat 40% alpha multiplier on every curve/node/handle/marker while
+    // bypassed, stacked ON TOP of whatever alpha that element would otherwise use (active/
+    // inactive/edit-mode dimming all still apply underneath -- see each colour.withAlpha call
+    // below). Markers keep animating regardless (setLanePosition is untouched by bypass; only
+    // paint()'s colour changes), matching the spec's "by design" call-out.
+    const float bypassMul = bypassed ? 0.4f : 1.0f;
+
     for (int i = 0; i < kNumLanes; ++i)
     {
         auto& lane = lanes[(size_t) i];
         const bool isEditLane = (i == editLane);
-        const auto colour = juce::Colour (LFlOwLookAndFeel::laneColour (i));
+        const auto colour = juce::Colour (LFlOwLookAndFeel::laneColour (i)).withAlpha (bypassMul);
 
         if (isEditLane)
         {
@@ -508,7 +523,7 @@ void LfoDisplay::paint (juce::Graphics& g)
             // (depth == 0) lane otherwise renders at 0.55 alpha, not 0.35 -- finding #5: at 0.35
             // it was effectively invisible, giving no clue lanes 2-3 existed.
             const float alpha = (editLane >= 0) ? 0.12f : (lane.active ? 1.0f : 0.55f);
-            g.setColour (colour.withAlpha (alpha));
+            g.setColour (colour.withMultipliedAlpha (alpha));
             g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
         }
 
@@ -556,5 +571,15 @@ void LfoDisplay::paint (juce::Graphics& g)
         auto hintArea = juce::Rectangle<float> (r.getX(), r.getBottom() - 14.0f, r.getWidth(), 12.0f);
         g.drawText ("click: add   drag: move / bend   double-click: delete   shift: snap", hintArea,
                     juce::Justification::centred, false);
+    }
+
+    // Phase 7 Task 6 (UX #9): "BYPASSED" tag, top-right, painted last so it sits on top of
+    // everything else. ASCII, onSurfaceVariant (a neutral state label, not a warning), 10pt.
+    if (bypassed)
+    {
+        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+        g.setColour (juce::Colour (C::onSurfaceVariant));
+        auto tagArea = juce::Rectangle<float> (r.getRight() - 84.0f, r.getY() + 2.0f, 80.0f, 12.0f);
+        g.drawText ("BYPASSED", tagArea, juce::Justification::centredRight, false);
     }
 }

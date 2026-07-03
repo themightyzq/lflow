@@ -3,7 +3,7 @@
 LFlOwLookAndFeel::LFlOwLookAndFeel()
 {
     setColour (juce::Slider::rotarySliderFillColourId,    juce::Colour (Colors::primary));
-    setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (Colors::outline));
+    setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (Colors::knobTrack));
     setColour (juce::Slider::thumbColourId,               juce::Colour (Colors::onSurface));
 
     // Readouts: one style everywhere — borderless, no background, quiet text. Values are

@@ -17,6 +17,9 @@ public:
         static constexpr juce::uint32 background      = 0xff1a1a1f;
         static constexpr juce::uint32 surface         = 0xff111116;
         static constexpr juce::uint32 outline         = 0xff2a2a33;
+        static constexpr juce::uint32 knobTrack       = 0xff3f3f4d; // rotary track only: outline
+                                                                    // is invisible over background
+                                                                    // at 0% (empty-looking knobs)
         static constexpr juce::uint32 onSurface       = 0xffe8e8ee;
         static constexpr juce::uint32 onSurfaceVariant= 0xff9a9aa6;
         static constexpr juce::uint32 primary         = 0xffff6bb5; // modulation pink

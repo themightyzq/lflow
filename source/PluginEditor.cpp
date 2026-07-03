@@ -428,8 +428,11 @@ void LFlOwAudioProcessorEditor::refreshXoverHint()
         return;
     xoverHiClampedState = stateKey;
 
+    // Normal state matches every other global label (onSurfaceVariant); the CLAMPED state is
+    // the one that stands out -- amber, the palette's warning tint. (The original logic was
+    // inverted: it brightened the normal state and dimmed the warning.)
     using C = LFlOwLookAndFeel::Colors;
-    const auto colour = juce::Colour (clamped ? C::onSurfaceVariant : C::onSurface);
+    const auto colour = juce::Colour (clamped ? C::lane2 : C::onSurfaceVariant);
     xoverHighLabel.setColour (juce::Label::textColourId, colour);
     xoverHighSlider.setColour (juce::Slider::textBoxTextColourId, colour);
 
@@ -492,7 +495,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
-    g.drawText ("v0.5.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
+    g.drawText ("v0.6.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
                 juce::Justification::centredRight, false);
 }
 

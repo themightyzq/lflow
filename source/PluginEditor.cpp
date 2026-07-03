@@ -168,6 +168,9 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
 
     styleRotary (s.phaseSlider, 40, 14);
     styleRotary (s.depthSlider, 42, 14);
+    // Lane knobs carry lane identity (the LnF default fill is primary, for global knobs).
+    s.phaseSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
+    s.depthSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
     addAndMakeVisible (s.phaseSlider);
     addAndMakeVisible (s.depthSlider);
 

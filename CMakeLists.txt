@@ -49,6 +49,7 @@ target_sources(LFlOw PRIVATE
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
     source/params/ParameterLayout.cpp
+    source/gui/LFlOwLookAndFeel.cpp
     source/gui/LfoDisplay.cpp
     source/shapes/ShapeManager.cpp)
 

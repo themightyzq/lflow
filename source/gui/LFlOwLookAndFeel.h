@@ -3,6 +3,12 @@
 
 // Central color system — NO hardcoded juce::Colours:: anywhere in editor code.
 // LFlOw is a Modulation plugin: primary accent is pink (#ff6bb5).
+//
+// This is also the identity pass (Phase 6 Task 1): every widget the eye lands on is drawn
+// here rather than left as a stock JUCE default — 270-degree arc rotaries (no ball thumb),
+// flat combo boxes with a custom chevron, pill toggle buttons, and borderless readouts.
+// Disabled controls always render at a flat 35% alpha so the Link-greying state (and any
+// other disablement) is unmistakable rather than the barely-there JUCE default.
 class LFlOwLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
@@ -21,23 +27,11 @@ public:
         static constexpr juce::uint32 lane2            = 0xffffab00; // lane 3 — amber
     };
 
-    LFlOwLookAndFeel()
-    {
-        setColour (juce::Slider::rotarySliderFillColourId,    juce::Colour (Colors::primary));
-        setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (Colors::outline));
-        setColour (juce::Slider::thumbColourId,               juce::Colour (Colors::onSurface));
-        setColour (juce::Slider::textBoxTextColourId,         juce::Colour (Colors::onSurface));
-        setColour (juce::Slider::textBoxOutlineColourId,      juce::Colour (0x00000000));
-        setColour (juce::ComboBox::backgroundColourId,        juce::Colour (Colors::surface));
-        setColour (juce::ComboBox::textColourId,              juce::Colour (Colors::onSurface));
-        setColour (juce::ComboBox::outlineColourId,           juce::Colour (Colors::outline));
-        setColour (juce::PopupMenu::backgroundColourId,       juce::Colour (Colors::surface));
-        setColour (juce::ToggleButton::textColourId,          juce::Colour (Colors::onSurfaceVariant));
-        setColour (juce::ToggleButton::tickColourId,          juce::Colour (Colors::primary));
-        setColour (juce::Label::textColourId,                 juce::Colour (Colors::onSurfaceVariant));
-        setColour (juce::TooltipWindow::backgroundColourId,   juce::Colour (Colors::surface));
-        setColour (juce::TooltipWindow::textColourId,         juce::Colour (Colors::onSurface));
-    }
+    // Disabled controls render at this alpha everywhere in this LookAndFeel (finding #5:
+    // JUCE's default disabled dimming is too subtle to notice against a dark theme).
+    static constexpr float disabledAlpha = 0.35f;
+
+    LFlOwLookAndFeel();
 
     // Lane accent colour by index (0/1/2), shared by the editor's LaneChip/labels and the
     // LfoDisplay overlay so both stay in lockstep with a single source of truth.
@@ -51,4 +45,27 @@ public:
             default: return C::lane2;
         }
     }
+
+    // ---- Rotary knobs: 270-degree arc, 3px round-capped stroke, small endpoint dot, no
+    // ball thumb, hollow center. Track in Colors::outline, value fill in the slider's own
+    // rotarySliderFillColourId (lane knobs get lane colours, globals inherit primary).
+    void drawRotarySlider (juce::Graphics&, int x, int y, int width, int height,
+                           float sliderPosProportional, float rotaryStartAngle,
+                           float rotaryEndAngle, juce::Slider&) override;
+
+    // ---- Combo boxes: flat surface fill, 1px outline border, 4px radius, custom two-stroke
+    // chevron, left-padded text.
+    void drawComboBox (juce::Graphics&, int width, int height, bool isButtonDown,
+                        int buttonX, int buttonY, int buttonW, int buttonH,
+                        juce::ComboBox&) override;
+    void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
+
+    // ---- Toggle buttons: pill shape. Off = outline pill / onSurfaceVariant text. On =
+    // filled with the button's tickColourId / background text. Centered label, no tick mark.
+    void drawToggleButton (juce::Graphics&, juce::ToggleButton&,
+                           bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
+
+    // ---- Labels (also the mechanism behind every slider's readout textbox and combo box
+    // text): borderless/backgroundless, single disabled-alpha standard.
+    void drawLabel (juce::Graphics&, juce::Label&) override;
 };

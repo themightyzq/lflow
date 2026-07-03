@@ -1,8 +1,14 @@
 # LFlOw — Project Contract
 
-LFlOw (LFO + FLOW) is a cross-platform VST3/AU LFO modulation plugin built on JUCE.
-Phase 1 is a single-LFO tremolo/auto-pan ("Chopper clone"). Roadmap and per-phase
-specs live in `docs/superpowers/specs/`.
+LFlOw (LFO + FLOW) is a cross-platform VST3/AU LFO modulation plugin built on JUCE, by ZQ SFX.
+Feature-complete at v0.7.0 (2026-07-03): 3 linked/unlinkable LFO lanes routed to Volume, Pan,
+3-band levels (LR4 crossovers), or Pitch (vibrato via mod delay); drawable custom shapes with
+in-display breakpoint editing; undo/redo; factory+user presets with A/B; custom LookAndFeel,
+resizable UI. Per-phase specs/plans live in `docs/superpowers/specs|plans/`; build history and
+deferred-item backlog in `.superpowers/sdd/progress.md` (gitignored scratch — recoverable from
+git log). Remaining work is release mechanics (signing/notarization/Soundminer install — see
+`docs/VST3_SOUNDMINER_SETUP.md`) plus roadmap features (retrigger modes, stereo spread,
+preset morphing).
 
 ## Standing working principles (non-negotiable)
 - **Verify your own work; do not trust that it worked.** Re-read the changed file, run the
@@ -24,6 +30,9 @@ thread) strictly separated.
   unit-tested headless via `lflow_tests`. This boundary is load-bearing for testability and
   for reuse by later phases (multi-lane, multiband).
 - Parameters live in APVTS; UI binds via attachments. No parameter state outside APVTS.
+- Shape nodes live in the SHAPES child of apvts.state (ShapeManager, message thread only);
+  audio thread gets baked tables via lock-free TripleBuffer. User presets: XML at
+  ~/Library/Audio/Presets/ZQ SFX/LFlOw/*.lflowpreset.
 
 ## UI & build house standards (binding)
 Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.md`:

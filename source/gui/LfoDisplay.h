@@ -54,6 +54,12 @@ public:
     // list; the editor wires this to ShapeManager::setNodes for the lane under edit.
     std::function<void (std::vector<lflow::ShapeNode>)> onNodesEdited;
 
+    // Phase 7 Task 5 (UX #4): fired when the user picks "Reset curve to triangle" from the
+    // right-click menu this component shows itself (mouseDown, edit mode only). The editor
+    // wires this to a single undoable ShapeManager::setNodes() transaction -- this component
+    // owns the menu (it's the thing being right-clicked) but not undo/ShapeManager access.
+    std::function<void()> onResetCurveRequested;
+
     // Phase 7 Task 3 (UX #1): fired at the START of every edit-mode mouse-down gesture (add,
     // move-node, or bend-segment -- before any hit-testing/mutation happens), never on a plain
     // click/drag when no lane is being edited. The editor wires this to
@@ -68,6 +74,8 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
 
 private:
     struct LaneState
@@ -100,8 +108,24 @@ private:
     juce::Rectangle<float> displayArea() const noexcept;
     juce::Point<float> nodeToScreen (const lflow::ShapeNode&) const noexcept;
     int findNodeNear (juce::Point<float> screenPos) const noexcept;     // node index or -1
-    int findSegmentNear (juce::Point<float> screenPos) const noexcept;  // segment (node j) or -1
+
+    // Screen-space center of segment j's bend handle (midpoint between node j and j+1, y =
+    // the curve's own evaluated value there -- so the diamond always sits ON the curve).
+    juce::Point<float> handleScreenPos (size_t segmentIndex) const noexcept;
+
+    // Phase 7 Task 5 (UX #3): replaces the old "click anywhere near the segment line"
+    // hit-test (findSegmentNear) that made spawning a spike-causing node almost unavoidable
+    // when trying to bend a segment. Now ONLY the explicit midpoint diamond (kNodeHitRadius,
+    // same 8px as a node) is grabbable -- everything else on/near the curve line falls
+    // through to "empty space -> add a node" in mouseDown, per the spec's documented hit
+    // order (node > handle > empty).
+    int findHandleNear (juce::Point<float> screenPos) const noexcept;  // segment (node j) or -1
     float curveValueAt (float x) const noexcept;                        // editTable lookup
+
+    // Shows the edit-mode right-click menu ("Reset curve to triangle") and fires
+    // onResetCurveRequested on selection. Owns menu presentation only -- see that
+    // callback's doc comment for why the actual reset lives in the editor.
+    void showResetCurveMenu();
 
     LaneState lanes[kNumLanes];
 
@@ -116,7 +140,14 @@ private:
     float dragStartScreenY { 0.0f };
     float dragStartCurve { 0.0f };
 
+    // Phase 7 Task 5 (UX #3): which segment's bend-handle diamond the mouse is currently
+    // hovering (paint()'s cue for hollow-vs-filled -- see the header comment on
+    // findHandleNear). -1 = none. Updated from mouseMove/mouseExit, not mouseDrag, so it
+    // still reflects true hover after a drag ends.
+    int hoverHandleIndex { -1 };
+
     static constexpr float kNodeHitRadius = 8.0f;
-    static constexpr float kSegmentHitTolerance = 8.0f;
+    static constexpr float kHandleHitRadius = 8.0f;
     static constexpr float kNodeHandleSize = 6.0f;
+    static constexpr float kSegmentHandleSize = 7.0f; // diamond "radius" (corner-to-center), per spec
 };

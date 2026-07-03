@@ -69,6 +69,7 @@ void LfoDisplay::setEditLane (int laneOrMinus1)
     editLane = laneOrMinus1;
     dragNodeIndex = -1;
     dragSegmentIndex = -1;
+    hoverHandleIndex = -1;
     editPathDirty = true;
     repaint();
 }
@@ -96,7 +97,7 @@ void LfoDisplay::rebuildEditPath()
         return;
 
     // Unshifted shape space: no phase offset baked in here, so this curve lines up with
-    // nodeToScreen/findNodeNear/findSegmentNear, which all key off raw node x. See paint()'s
+    // nodeToScreen/findNodeNear/findHandleNear, which all key off raw node x. See paint()'s
     // marker-x branch for the edit lane, which matches this by using the reported phase directly.
     juce::Path p;
     constexpr int N = 128;
@@ -190,7 +191,15 @@ float LfoDisplay::curveValueAt (float x) const noexcept
     return lflow::shapeTableValue (editTable, lflow::kShapeTableSize, x);
 }
 
-int LfoDisplay::findSegmentNear (juce::Point<float> screenPos) const noexcept
+juce::Point<float> LfoDisplay::handleScreenPos (size_t segmentIndex) const noexcept
+{
+    const auto r = displayArea();
+    const float midX = 0.5f * (editNodes[segmentIndex].x + editNodes[segmentIndex + 1].x);
+    const float v = curveValueAt (midX);
+    return { r.getX() + midX * r.getWidth(), r.getBottom() - v * r.getHeight() };
+}
+
+int LfoDisplay::findHandleNear (juce::Point<float> screenPos) const noexcept
 {
     if (editNodes.size() < 2)
         return -1;
@@ -199,24 +208,18 @@ int LfoDisplay::findSegmentNear (juce::Point<float> screenPos) const noexcept
     if (r.getWidth() <= 0.0f)
         return -1;
 
-    const float x = (screenPos.x - r.getX()) / r.getWidth();
-    const float firstX = editNodes.front().x;
-    const float lastX  = editNodes.back().x;
-    if (x < firstX || x > lastX)
-        return -1; // flat extension either side of the drawn nodes -- not a bendable segment
-
+    int best = -1;
+    float bestDist = kHandleHitRadius;
     for (size_t j = 0; j + 1 < editNodes.size(); ++j)
     {
-        if (x >= editNodes[j].x && x <= editNodes[j + 1].x)
+        const float d = handleScreenPos (j).getDistanceFrom (screenPos);
+        if (d <= bestDist)
         {
-            const float v = curveValueAt (x);
-            const float y = r.getBottom() - v * r.getHeight();
-            if (std::abs (y - screenPos.y) <= kSegmentHitTolerance)
-                return (int) j;
-            return -1;
+            bestDist = d;
+            best = (int) j;
         }
     }
-    return -1;
+    return best;
 }
 
 void LfoDisplay::mouseDown (const juce::MouseEvent& e)
@@ -227,11 +230,26 @@ void LfoDisplay::mouseDown (const juce::MouseEvent& e)
     if (editLane < 0)
         return;
 
+    // Phase 7 Task 5 (UX #4): right-click anywhere in the display while editing -> "Reset
+    // curve to triangle" menu. Checked before the gesture-start/hit-testing below -- a
+    // right-click is never itself an editing gesture.
+    if (e.mods.isPopupMenu())
+    {
+        showResetCurveMenu();
+        return;
+    }
+
     // Phase 7 Task 3 (UX #1): one transaction per gesture, started here before any
     // hit-testing/mutation -- see onGestureStart's doc comment (header).
     if (onGestureStart)
         onGestureStart();
 
+    // Phase 7 Task 5 (UX #3): hit order is node > handle > empty=add, in that order --
+    // this is what kills the spawn-a-spike failure mode (the old findSegmentNear hit-test
+    // treated most of the curve LINE itself as bendable, so a bend attempt very easily
+    // landed just off the line and added a node instead). Now ONLY the explicit midpoint
+    // diamond handle bends a segment; everything else on/near the line falls through to
+    // "empty space -> add".
     const int hitNode = findNodeNear (e.position);
     if (hitNode >= 0)
     {
@@ -239,12 +257,12 @@ void LfoDisplay::mouseDown (const juce::MouseEvent& e)
         return;
     }
 
-    const int hitSeg = findSegmentNear (e.position);
-    if (hitSeg >= 0)
+    const int hitHandle = findHandleNear (e.position);
+    if (hitHandle >= 0)
     {
-        dragSegmentIndex = hitSeg;
+        dragSegmentIndex = hitHandle;
         dragStartScreenY = e.position.y;
-        dragStartCurve = editNodes[(size_t) hitSeg].curve;
+        dragStartCurve = editNodes[(size_t) hitHandle].curve;
         return;
     }
 
@@ -298,8 +316,20 @@ void LfoDisplay::mouseDrag (const juce::MouseEvent& e)
         const float rightBound = (dragNodeIndex + 1 < (int) editNodes.size())
             ? editNodes[(size_t) dragNodeIndex + 1].x : 1.0f;
 
-        const float x = (e.position.x - r.getX()) / r.getWidth();
-        const float y = 1.0f - (e.position.y - r.getY()) / r.getHeight();
+        float x = (e.position.x - r.getX()) / r.getWidth();
+        float y = 1.0f - (e.position.y - r.getY()) / r.getHeight();
+
+        // Phase 7 Task 5: Shift-snap while dragging a NODE -- x to 1/16 divisions, y to 1/8
+        // (spec section E). Snapped BEFORE the existing left/right-neighbour x clamp and [0,1] y
+        // clamp below, so a snap that lands outside this node's allowed range still gets
+        // pulled back in rather than jumping past a neighbour.
+        if (e.mods.isShiftDown())
+        {
+            constexpr float xGrid = 1.0f / 16.0f;
+            constexpr float yGrid = 1.0f / 8.0f;
+            x = std::round (x / xGrid) * xGrid;
+            y = std::round (y / yGrid) * yGrid;
+        }
 
         n.x = juce::jlimit (leftBound, rightBound, x);
         n.y = juce::jlimit (0.0f, 1.0f, y);
@@ -333,6 +363,28 @@ void LfoDisplay::mouseUp (const juce::MouseEvent&)
     dragSegmentIndex = -1;
 }
 
+void LfoDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    // Phase 7 Task 5 (UX #3): tracks which segment handle (if any) is hovered, purely for
+    // the diamond's hollow-vs-filled paint cue (see paint()) -- no hit-testing side effect,
+    // mouseDown does its own findHandleNear() call independently.
+    const int hovered = (editLane >= 0) ? findHandleNear (e.position) : -1;
+    if (hovered != hoverHandleIndex)
+    {
+        hoverHandleIndex = hovered;
+        repaint();
+    }
+}
+
+void LfoDisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverHandleIndex != -1)
+    {
+        hoverHandleIndex = -1;
+        repaint();
+    }
+}
+
 void LfoDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 {
     if (editLane < 0)
@@ -350,6 +402,24 @@ void LfoDisplay::mouseDoubleClick (const juce::MouseEvent& e)
     repaint();
     if (onNodesEdited)
         onNodesEdited (editNodes);
+}
+
+void LfoDisplay::showResetCurveMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, "Reset curve to triangle");
+
+    // Async per JUCE 8 house rules (see PluginEditor's preset menu for the same pattern).
+    // SafePointer: this component (and its owning editor) can be destroyed while the menu
+    // is open; the callback then simply does nothing.
+    juce::Component::SafePointer<LfoDisplay> safeThis (this);
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis] (int result)
+    {
+        if (safeThis == nullptr || result != 1)
+            return;
+        if (safeThis->onResetCurveRequested)
+            safeThis->onResetCurveRequested();
+    });
 }
 
 void LfoDisplay::paint (juce::Graphics& g)
@@ -408,6 +478,28 @@ void LfoDisplay::paint (juce::Graphics& g)
                 g.fillRect (juce::Rectangle<float> (kNodeHandleSize, kNodeHandleSize)
                                 .withCentre (p));
             }
+
+            // Phase 7 Task 5 (UX #3): per-segment bend handles -- a small diamond at each
+            // segment's midpoint, sitting ON the curve (handleScreenPos). Hollow (stroke
+            // only) normally; filled solid while hovered or actively being dragged, so the
+            // handle reads as "grabbable" without cluttering the curve when idle.
+            for (size_t j = 0; j + 1 < editNodes.size(); ++j)
+            {
+                const auto p = handleScreenPos (j);
+                juce::Path diamond;
+                diamond.startNewSubPath (p.x, p.y - kSegmentHandleSize);
+                diamond.lineTo (p.x + kSegmentHandleSize, p.y);
+                diamond.lineTo (p.x, p.y + kSegmentHandleSize);
+                diamond.lineTo (p.x - kSegmentHandleSize, p.y);
+                diamond.closeSubPath();
+
+                g.setColour (colour);
+                const bool highlighted = ((int) j == hoverHandleIndex) || ((int) j == dragSegmentIndex);
+                if (highlighted)
+                    g.fillPath (diamond);
+                else
+                    g.strokePath (diamond, juce::PathStrokeType (1.5f));
+            }
         }
         else
         {
@@ -449,7 +541,7 @@ void LfoDisplay::paint (juce::Graphics& g)
     // its own interaction grammar). Painted last so it sits on top of the curves/markers above,
     // clear of the curve area's usable space (a ~16px strip at the bottom, per the design spec)
     // -- deliberately NOT folded into displayArea()/the transform above, since that geometry
-    // also drives hit-testing (nodeToScreen/findNodeNear/findSegmentNear) and must stay exactly
+    // also drives hit-testing (nodeToScreen/findNodeNear/findHandleNear) and must stay exactly
     // as the mouse handlers expect it; this is a paint-time-only overlay.
     if (editLane >= 0)
     {
@@ -462,7 +554,7 @@ void LfoDisplay::paint (juce::Graphics& g)
 
         g.setColour (juce::Colour (C::onSurfaceVariant));
         auto hintArea = juce::Rectangle<float> (r.getX(), r.getBottom() - 14.0f, r.getWidth(), 12.0f);
-        g.drawText ("click: add   drag: move / bend   double-click: delete", hintArea,
+        g.drawText ("click: add   drag: move / bend   double-click: delete   shift: snap", hintArea,
                     juce::Justification::centred, false);
     }
 }

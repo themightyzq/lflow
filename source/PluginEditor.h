@@ -60,6 +60,12 @@ private:
 
         std::function<void()> onClick;
 
+        // Phase 7 Task 5 (UX #4): right-click -> "Reset lane to defaults" / "Reset curve to
+        // triangle" menu, fired regardless of isEnabled() (a linked follower can still be
+        // reset; only its left-click edit-mode toggle is gated by isEnabled(), same as
+        // before). The editor owns menu content/undo -- this is purely input routing.
+        std::function<void()> onRightClick;
+
     private:
         juce::uint32 colour { 0xffffffffu };
         int number { 1 };
@@ -235,6 +241,19 @@ private:
     // follower, otherwise the lane's own raw waveform. Shared by the chip-click gate and the
     // edit-mode watchdog so neither can be fooled by a follower's hidden Custom shape.
     lflow::Waveform effectiveWaveform (int lane) const;
+
+    // Phase 7 Task 5 (UX #4): scoped, undoable resets. showLaneChipMenu() is the lane chip's
+    // right-click handler (async popup: "Reset lane to defaults" always, "Reset curve to
+    // triangle" only when that lane's effective waveform is Custom). resetLaneToDefaults()
+    // sets that lane's 8 own parameters (not the follower-effective ones) back to their APVTS
+    // layout defaults via setValueNotifyingHost, one named undo transaction. resetLaneCurve()
+    // resets ONE lane's drawn shape to the default triangle via ShapeManager::setNodes (an
+    // empty node list is its documented "invalid input" fallback -- see setNodes()'s doc
+    // comment), also one named undo transaction. Both are wired to the lane chip AND (for the
+    // currently-edited lane's curve) the display's own right-click menu.
+    void showLaneChipMenu (int lane);
+    void resetLaneToDefaults (int lane);
+    void resetLaneCurve (int lane);
 
     // Folded Phase 3 item: tints the Xover Hi label/readout and extends its tooltip when the
     // engine is clamping it against xoverLow*1.25 (see MultiLaneEngine/xover clamp behaviour).

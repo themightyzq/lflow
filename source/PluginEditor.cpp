@@ -24,6 +24,17 @@ constexpr LaneIds laneIds[3] = {
     { lflow::pid::l3Waveform, lflow::pid::l3Sync, lflow::pid::l3RateHz, lflow::pid::l3Division,
       lflow::pid::l3Rhythm, lflow::pid::l3Phase, lflow::pid::l3Depth, lflow::pid::l3Dest },
 };
+
+// Phase 7 Task 5: every knob's setDoubleClickReturnValue() reads its default straight off the
+// live APVTS parameter (AudioProcessorParameter::getDefaultValue(), which is normalized [0,1])
+// rather than a hardcoded literal, so this can never drift from ParameterLayout.cpp. Returns
+// 0.0f (a harmless no-op default) if the id is somehow unknown -- jassert catches that in debug.
+float paramDefault (juce::AudioProcessorValueTreeState& apvts, const char* paramId)
+{
+    auto* p = apvts.getParameter (paramId);
+    jassert (p != nullptr);
+    return p != nullptr ? p->convertFrom0to1 (p->getDefaultValue()) : 0.0f;
+}
 } // namespace
 
 // ---------------------------------------------------------------------- LaneChip
@@ -55,8 +66,19 @@ void LFlOwAudioProcessorEditor::LaneChip::paint (juce::Graphics& g)
     g.drawText (juce::String (number), getLocalBounds(), juce::Justification::centred, false);
 }
 
-void LFlOwAudioProcessorEditor::LaneChip::mouseDown (const juce::MouseEvent&)
+void LFlOwAudioProcessorEditor::LaneChip::mouseDown (const juce::MouseEvent& e)
 {
+    // Phase 7 Task 5 (UX #4): right-click -> reset menu, deliberately NOT gated by
+    // isEnabled() -- a linked follower's own params/curve can still be reset even while its
+    // motion controls are greyed out (its left-click edit-mode toggle stays isEnabled()-gated
+    // below, unchanged).
+    if (e.mods.isPopupMenu())
+    {
+        if (onRightClick)
+            onRightClick();
+        return;
+    }
+
     if (onClick && isEnabled())
         onClick();
 }
@@ -92,8 +114,10 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
 
     addAndMakeVisible (display);
     display.setTooltip ("When a lane is in edit mode (its chip highlighted): click empty space "
-                         "to add a node, drag a node to move it, drag a segment vertically to "
-                         "bend it, double-click a node to delete it (2 minimum)");
+                         "to add a node, drag a node to move it, drag a segment's diamond handle "
+                         "vertically to bend it, double-click a node to delete it (2 minimum). "
+                         "Hold Shift while dragging a node to snap to the grid. Right-click for "
+                         "reset options.");
     display.onNodesEdited = [this] (std::vector<lflow::ShapeNode> nodes)
     {
         if (editLane >= 0)
@@ -105,6 +129,14 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     display.onGestureStart = [this]
     {
         processorRef.getUndoManager().beginNewTransaction ("Edit shape");
+    };
+    // Phase 7 Task 5 (UX #4): the display's own right-click "Reset curve to triangle" menu
+    // (edit mode only, so editLane is always valid here -- see LfoDisplay::mouseDown, which
+    // only shows that menu when editLane >= 0).
+    display.onResetCurveRequested = [this]
+    {
+        if (editLane >= 0)
+            resetLaneCurve (editLane);
     };
 
     for (int i = 0; i < 3; ++i)
@@ -119,6 +151,13 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     styleRotary (smoothSlider, 46, 16);
     styleRotary (xoverLowSlider, 62, 16);  // wide enough for "2000 Hz" (finding #1)
     styleRotary (xoverHighSlider, 62, 16); // wide enough for "2500 Hz" (finding #1)
+    // Phase 7 Task 5 (UX #4): double-click-to-default on every global rotary, value pulled
+    // live from the APVTS parameter's own default (paramDefault helper, above) rather than
+    // hardcoded -- see that helper's doc comment.
+    mixSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::mix));
+    smoothSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::smooth));
+    xoverLowSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::xoverLow));
+    xoverHighSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::xoverHigh));
     mixSlider.setTooltip ("Blend between dry and processed signal");
     smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");
     xoverLowSlider.setTooltip ("Crossover between the Low and Mid bands");
@@ -366,8 +405,10 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     const auto colour = LFlOwLookAndFeel::laneColour (i);
     s.chip.setup (colour, i + 1);
     s.chip.setTooltip (laneName + ": when this lane's waveform is Custom, click to enter "
-                        "or exit its breakpoint editor in the display above");
+                        "or exit its breakpoint editor in the display above; right-click for "
+                        "reset options");
     s.chip.onClick = [this, i] { onLaneChipClicked (i); };
+    s.chip.onRightClick = [this, i] { showLaneChipMenu (i); };
     addAndMakeVisible (s.chip);
 
     s.nameLabel.setText (laneName, juce::dontSendNotification);
@@ -409,6 +450,14 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.depthSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
     addAndMakeVisible (s.phaseSlider);
     addAndMakeVisible (s.depthSlider);
+
+    // Phase 7 Task 5 (UX #4): double-click-to-default on this lane's rotaries + the Rate
+    // slider, each pulled from that lane's OWN APVTS parameter default (paramDefault helper) --
+    // depth's default differs per lane (Lane 1 50%, Lanes 2-3 0%, see ParameterLayout.cpp), so
+    // hardcoding a single literal here would be wrong for 2 of the 3 lanes.
+    s.phaseSlider.setDoubleClickReturnValue (true, paramDefault (apvts, ids.phase));
+    s.depthSlider.setDoubleClickReturnValue (true, paramDefault (apvts, ids.depth));
+    s.rateSlider.setDoubleClickReturnValue (true, paramDefault (apvts, ids.rateHz));
 
     s.waveformBox.setTooltip (laneName + ": shape of the LFO motion");
     s.syncButton.setTooltip  (laneName + ": lock this lane's speed to host tempo");
@@ -565,6 +614,80 @@ lflow::Waveform LFlOwAudioProcessorEditor::effectiveWaveform (int lane) const
     const bool followsLane1Motion = (lane != 0) && link;
     const char* waveformId = followsLane1Motion ? laneIds[0].waveform : laneIds[lane].waveform;
     return static_cast<lflow::Waveform> ((int) raw (waveformId));
+}
+
+void LFlOwAudioProcessorEditor::showLaneChipMenu (int lane)
+{
+    if (lane < 0 || lane >= 3)
+        return;
+
+    // "Reset curve to triangle" only makes sense (and is only shown) when this lane's
+    // EFFECTIVE waveform is Custom -- same rule the chip's own edit-mode gate uses. Note
+    // this deliberately does NOT check Link/follower status the way onLaneChipClicked does:
+    // resetLaneToDefaults() always acts on lane `lane`'s OWN 8 parameters (never a follower's
+    // effective ones), so it's meaningful even while linked.
+    const bool showCurveReset = effectiveWaveform (lane) == lflow::Waveform::Custom;
+
+    juce::PopupMenu menu;
+    menu.addItem (1, "Reset lane to defaults");
+    if (showCurveReset)
+        menu.addItem (2, "Reset curve to triangle");
+
+    juce::Component::SafePointer<LFlOwAudioProcessorEditor> safeThis (this);
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis, lane] (int result)
+    {
+        if (safeThis == nullptr || result == 0)
+            return;
+
+        if (result == 1)
+            safeThis->resetLaneToDefaults (lane);
+        else if (result == 2)
+            safeThis->resetLaneCurve (lane);
+    });
+}
+
+void LFlOwAudioProcessorEditor::resetLaneToDefaults (int lane)
+{
+    if (lane < 0 || lane >= 3)
+        return;
+
+    auto& apvts = processorRef.getAPVTS();
+    auto& um = processorRef.getUndoManager();
+    const auto& ids = laneIds[lane];
+
+    // One named transaction for all 8 params (Cmd-Z undoes the whole reset in one step) --
+    // same beginChangeGesture/setValueNotifyingHost/endChangeGesture pattern PresetManager
+    // uses for its own programmatic parameter jumps (see PresetManager::applyStateTree).
+    um.beginNewTransaction ("Reset lane " + juce::String (lane + 1) + " to defaults");
+
+    for (const char* paramId : { ids.waveform, ids.sync, ids.rateHz, ids.division, ids.rhythm,
+                                  ids.phase, ids.depth, ids.dest })
+    {
+        auto* p = apvts.getParameter (paramId);
+        if (p == nullptr)
+            continue;
+
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->getDefaultValue());
+        p->endChangeGesture();
+    }
+
+    // Forces the APVTS param->tree flush now (JUCE otherwise defers it), so the resulting
+    // undoable ValueTree property writes land inside THIS transaction rather than a later,
+    // separate one (same reasoning as PresetManager::applyStateTree's own capture call).
+    (void) apvts.copyState();
+}
+
+void LFlOwAudioProcessorEditor::resetLaneCurve (int lane)
+{
+    if (lane < 0 || lane >= 3)
+        return;
+
+    // Empty node list is ShapeManager::setNodes()'s own documented "fewer than 2 survive"
+    // fallback -- it writes the default rise-fall triangle (0,0)(0.5,1)(1,0) instead of
+    // rejecting the call, so this is the same one-line reset PresetManager relies on.
+    processorRef.getUndoManager().beginNewTransaction ("Reset lane " + juce::String (lane + 1) + " curve");
+    processorRef.getShapeManager().setNodes (lane, {}, &processorRef.getUndoManager());
 }
 
 void LFlOwAudioProcessorEditor::setEditLane (int lane)

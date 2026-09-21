@@ -6,3 +6,6 @@ JUCE/
 *.component
 .cache/
 .superpowers/
+
+# Diversion workspace marker (machine-specific, contains an absolute path)
+.diversion/

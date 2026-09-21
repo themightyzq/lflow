@@ -31,8 +31,11 @@ endif()
 juce_add_plugin(LFlOw
     PRODUCT_NAME "LFlOw"
     COMPANY_NAME "ZQ SFX"
+    COMPANY_WEBSITE "https://www.zq-sfx.com"
+    COMPANY_EMAIL "connect@zq-sfx.com"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 ZQ SFX"
     BUNDLE_ID "com.zqsfx.lflow"
-    PLUGIN_MANUFACTURER_CODE Zqlr
+    PLUGIN_MANUFACTURER_CODE ZQSF
     PLUGIN_CODE Lflw
     FORMATS ${LFLOW_FORMATS}
     VST3_CATEGORIES "Fx" "Modulation"

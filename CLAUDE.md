@@ -1,3 +1,5 @@
+Universal ZQ SFX rules (identity, real-time safety, VCS policy, signing, shared agents, shared docs) live in ../CLAUDE.md and apply here. This file only adds what is specific to LFlOw.
+
 # LFlOw — Project Contract
 
 LFlOw (LFO + FLOW) is a cross-platform VST3/AU LFO modulation plugin built on JUCE, by ZQ SFX.
@@ -35,9 +37,13 @@ thread) strictly separated.
   ~/Library/Audio/Presets/ZQ SFX/LFlOw/*.lflowpreset.
 
 ## UI & build house standards (binding)
-Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.md`:
+Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.md` (both are
+now pointer stubs to the canonical copies in `../docs/`; fix the canonical copy, not the stub):
 - All colors come from `LFlOwLookAndFeel::Colors` (LFlOw = Modulation → pink `#ff6bb5`); never
-  hardcode `juce::Colours::` in editor/gui code.
+  hardcode `juce::Colours::` in editor/gui code. The house look is migrating to a shared design
+  system baselined on Broken (`../docs/ZQSFX_UI_STYLE_GUIDE.md`, draft) — LFlOw has not migrated
+  yet, and this meaning-carrying colour rule (lanes, Modulation pink) is preserved through any
+  future restyle.
 - Generic fonts only (`juce::FontOptions(size)`, never "Arial"); ASCII-only displayed strings
   (no `deg`/`->`/`-inf` Unicode); every interactive control has a tooltip; editor holds a
   `juce::TooltipWindow`.
@@ -67,10 +73,12 @@ macOS (VST3 + AU), Windows (VST3), Linux (VST3). Standalone is a dev/test conven
 Versioning: semver in CMake `project(... VERSION ...)`.
 
 ## Version control: Diversion (NOT git)
-This project uses **Diversion** (`dv` CLI at `~/.diversion/bin/dv`), not git. Do not run
-`git commit`/branch/PR flows for project work. Use Diversion's workflow (`dv status`,
-`dv commit`, etc.). (A stray local `.git` repo from early setup may exist; it is not the
-source of truth.)
+This project uses **Diversion** (`dv` CLI at `~/.diversion/bin/dv`) as the authoritative VCS,
+per ../CLAUDE.md section 3. Do not run `git commit`/branch/PR flows for project work. Use
+Diversion's workflow (`dv status`, `dv commit`, etc.). A local `git` repository also exists
+(no remote configured, currently on branch `chore/zqsfx-identity` off `main`); it is not the
+source of truth and is not a publishing target. Its `.diversion/` workspace marker was
+accidentally tracked by git and has since been untracked (`git rm --cached`) — never re-add it.
 
 ## Steering layers
 Always-on rules → this file. Reusable playbooks → skills. Context-isolating/parallel work →

@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <zqsfx_ui/zqsfx_ui.h>
 #include "dsp/LfoCore.h"
 #include "dsp/ShapeModel.h"
 #include <functional>

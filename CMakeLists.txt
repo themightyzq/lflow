@@ -17,6 +17,14 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+# The ZQ SFX house UI (tokens, LookAndFeel, bound controls, embedded OFL fonts). Must come
+# AFTER JUCE. Pinned by tag: bump deliberately, then re-run lflow_ui_snapshot and compare.
+FetchContent_Declare(zqsfx_ui
+    GIT_REPOSITORY https://github.com/themightyzq/zqsfx_ui.git
+    GIT_TAG v0.2.1
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(zqsfx_ui)
+
 # ---- Shared pure-C++ DSP library (no JUCE) ----
 add_library(lflow_dsp STATIC source/dsp/MultiLaneEngine.cpp)
 target_include_directories(lflow_dsp PUBLIC source/dsp)
@@ -72,12 +80,31 @@ endif()
 
 target_link_libraries(LFlOw PRIVATE
     lflow_dsp
+    zqsfx::ui
     juce::juce_audio_utils
     juce::juce_dsp
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+# ---- UI snapshot tool (headless before/after render gate for the zqsfx_ui migration) ----
+# pamplejuce pattern: link against the plugin's own shared-code target ("LFlOw", produced by
+# juce_add_plugin above) instead of recompiling PluginProcessor.cpp/PluginEditor.cpp a second
+# time. juce_generate_juce_header(LFlOw)'s generated JuceHeader.h is only added to LFlOw's OWN
+# include path as PRIVATE (see JUCEUtils.cmake), so it does not propagate through
+# target_link_libraries; it is added back explicitly below via JUCE_GENERATED_SOURCES_DIRECTORY.
+juce_add_console_app(lflow_ui_snapshot PRODUCT_NAME "lflow_ui_snapshot")
+target_sources(lflow_ui_snapshot PRIVATE tools/ui_snapshot/main.cpp)
+target_include_directories(lflow_ui_snapshot PRIVATE
+    source source/params source/dsp source/gui source/shapes source/presets
+    $<TARGET_PROPERTY:LFlOw,JUCE_GENERATED_SOURCES_DIRECTORY>)
+target_link_libraries(lflow_ui_snapshot PRIVATE
+    LFlOw
+    lflow_dsp
+    zqsfx::ui
+    juce::juce_audio_utils
+    juce::juce_dsp)
 
 # ---- Tests (added in Task 3) ----
 enable_testing()

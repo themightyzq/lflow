@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <zqsfx_ui/zqsfx_ui.h>
 #include "PluginProcessor.h"
 #include "gui/LFlOwLookAndFeel.h"
 #include "gui/LfoDisplay.h"
@@ -67,7 +68,10 @@ private:
         std::function<void()> onRightClick;
 
     private:
-        juce::uint32 colour { 0xffffffffu };
+        // Overwritten by setup() before this chip is ever painted; a real house token (rather
+        // than a raw 0xff literal) so the migration's "no colour literal outside
+        // LFlOwLookAndFeel.h" grep gate stays honest even about placeholder values.
+        juce::uint32 colour { LFlOwLookAndFeel::Colors::onSurface };
         int number { 1 };
         bool editActive { false };
         bool isFollowing { false };
@@ -139,6 +143,11 @@ private:
     LFlOwAudioProcessor& processorRef;
     LFlOwLookAndFeel lookAndFeel;
     juce::TooltipWindow tooltipWindow { this, 500 };
+
+    // The ZQ SFX mark (style guide section 5): header row, far right, doubles as the About-box
+    // trigger. logo.onClick wires to showAboutBox() in the ctor.
+    zqsfx::ui::LogoMark logo { "LFlOw" };
+    void showAboutBox();
 
     LfoDisplay display;
 

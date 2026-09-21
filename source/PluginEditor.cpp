@@ -62,7 +62,12 @@ void LFlOwAudioProcessorEditor::LaneChip::paint (juce::Graphics& g)
     g.setColour (juce::Colour (fillColour).withAlpha (alpha));
     g.fillRoundedRectangle (r.reduced (editActive ? 2.0f : 0.0f), 4.0f);
     g.setColour (juce::Colour (C::background).withAlpha (alpha));
-    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    // House silk face (Barlow Condensed) via whatever LookAndFeel is active, with a plain
+    // generic-font fallback so this never fails to draw the lane number.
+    if (auto* houseLnF = dynamic_cast<zqsfx::ui::LookAndFeel*> (&getLookAndFeel()))
+        g.setFont (houseLnF->silkFont (11.0f, true));
+    else
+        g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
     g.drawText (juce::String (number), getLocalBounds(), juce::Justification::centred, false);
 }
 
@@ -118,6 +123,19 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
                          "vertically to bend it, double-click a node to delete it (2 minimum). "
                          "Hold Shift while dragging a node to snap to the grid. Right-click for "
                          "reset options.");
+    // Accessibility floor (style guide section 8): a custom component (not a stock JUCE
+    // control) needs its own setAccessible/title/description -- a screen reader has no useful
+    // name for a bare Component otherwise.
+    display.setTitle ("LFO shape display");
+    display.setDescription ("Overlaid one-cycle curves for all 3 lanes plus each active lane's "
+                             "live position marker; also the in-place breakpoint editor for "
+                             "whichever lane is in edit mode.");
+    display.setAccessible (true);
+
+    // The ZQ SFX mark (style guide section 5): header row, far right; also the About-box
+    // trigger (LogoMark sets its own tooltip/title/description to "About LFlOw" already).
+    logo.onClick = [this] { showAboutBox(); };
+    addAndMakeVisible (logo);
     display.onNodesEdited = [this] (std::vector<lflow::ShapeNode> nodes)
     {
         if (editLane >= 0)
@@ -144,6 +162,8 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
 
     linkButton.setTooltip ("Gang lanes 2 and 3 to lane 1's waveform, sync, rate, division, "
                             "and rhythm (phase offset, depth, and destination stay per-lane)");
+    linkButton.setTitle ("Link");
+    linkButton.setDescription (linkButton.getTooltip());
     addAndMakeVisible (linkButton);
     linkAtt = std::make_unique<APVTS::ButtonAttachment> (apvts, lflow::pid::link, linkButton);
 
@@ -162,6 +182,10 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");
     xoverLowSlider.setTooltip ("Crossover between the Low and Mid bands");
     xoverHighSlider.setTooltip ("Crossover between the Mid and High bands");
+    mixSlider.setTitle ("Mix");             mixSlider.setDescription (mixSlider.getTooltip());
+    smoothSlider.setTitle ("Smooth");       smoothSlider.setDescription (smoothSlider.getTooltip());
+    xoverLowSlider.setTitle ("Xover Lo");   xoverLowSlider.setDescription (xoverLowSlider.getTooltip());
+    xoverHighSlider.setTitle ("Xover Hi");  xoverHighSlider.setDescription (xoverHighSlider.getTooltip());
     for (auto* s : { &mixSlider, &smoothSlider, &xoverLowSlider, &xoverHighSlider }) addAndMakeVisible (s);
     for (auto* l : { &mixLabel, &smoothLabel, &xoverLowLabel, &xoverHighLabel })
     { l->setJustificationType (juce::Justification::centred); addAndMakeVisible (l); }
@@ -170,9 +194,13 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     xoverLowAtt  = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::xoverLow,  xoverLowSlider);
     xoverHighAtt = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::xoverHigh, xoverHighSlider);
 
+    // buttonOnColourId is no longer set here: the house drawButtonBackground always paints an
+    // "on" TextButton as colour::accent regardless of this colour id (and Colors::primary is
+    // now that exact same accent value), so the old override had become a no-op.
     bypassButton.setClickingTogglesState (true);
-    bypassButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LFlOwLookAndFeel::Colors::primary));
     bypassButton.setTooltip ("Bypass the effect, passing audio through unchanged");
+    bypassButton.setTitle ("Bypass");
+    bypassButton.setDescription (bypassButton.getTooltip());
     addAndMakeVisible (bypassButton);
     bypassAtt = std::make_unique<APVTS::ButtonAttachment> (apvts, lflow::pid::bypass, bypassButton);
 
@@ -181,6 +209,8 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     // so no extra caching is needed here to keep the 60Hz refresh cheap.
     undoButton.setTooltip ("Undo (Cmd-Z)");
     redoButton.setTooltip ("Redo (Cmd-Shift-Z)");
+    undoButton.setTitle ("Undo");   undoButton.setDescription (undoButton.getTooltip());
+    redoButton.setTitle ("Redo");   redoButton.setDescription (redoButton.getTooltip());
     undoButton.onClick = [this] { processorRef.getUndoManager().undo(); };
     redoButton.onClick = [this] { processorRef.getUndoManager().redo(); };
     undoButton.setEnabled (false);
@@ -233,6 +263,20 @@ bool LFlOwAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
+void LFlOwAudioProcessorEditor::showAboutBox()
+{
+    // ASCII-only (project rule); product name + version from the real build (JucePlugin_
+    // VersionString, generated from CMakeLists.txt's project(... VERSION ...)), not a
+    // hand-maintained literal that could drift from it.
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "About LFlOw",
+        juce::String ("LFlOw ") + JucePlugin_VersionString +
+            "\n\nZQ SFX - https://www.zq-sfx.com - connect@zq-sfx.com\n"
+            "Free software under GPL-3.0-or-later. Built with JUCE.\n"
+            "Fonts: Barlow Condensed, VT323, IBM Plex Mono (SIL OFL).\n"
+            "Knobs: CC0 designs from the g200kg KnobGallery.",
+        "Close", this);
+}
+
 // ---------------------------------------------------------------- Preset bar (P7 T4, UX #2)
 
 void LFlOwAudioProcessorEditor::buildPresetBar()
@@ -240,6 +284,9 @@ void LFlOwAudioProcessorEditor::buildPresetBar()
     presetPrevButton.setTooltip ("Load the previous preset (factory list first, then your saved presets)");
     presetNextButton.setTooltip ("Load the next preset (factory list first, then your saved presets)");
     presetMenuButton.setTooltip ("Preset menu: factory presets, your saved presets, Save As, open presets folder");
+    presetPrevButton.setTitle ("Previous preset"); presetPrevButton.setDescription (presetPrevButton.getTooltip());
+    presetNextButton.setTitle ("Next preset");     presetNextButton.setDescription (presetNextButton.getTooltip());
+    presetMenuButton.setTitle ("Preset menu");     presetMenuButton.setDescription (presetMenuButton.getTooltip());
     presetPrevButton.onClick = [this] { processorRef.getPresetManager().loadNeighbour (-1); refreshPresetBar(); };
     presetNextButton.onClick = [this] { processorRef.getPresetManager().loadNeighbour (+1); refreshPresetBar(); };
     presetMenuButton.onClick = [this] { showPresetMenu(); };
@@ -254,21 +301,25 @@ void LFlOwAudioProcessorEditor::buildPresetBar()
 
     // A/B pills: toggle look driven manually from PresetManager::getActiveSlot() (same
     // pattern as the lane Edit pills -- the click acts on the manager, refreshPresetBar()
-    // reflects the result). ON tint matches Bypass (buttonOnColourId = primary).
+    // reflects the result). No buttonOnColourId override needed: the house drawButtonBackground
+    // always paints an "on" TextButton as colour::accent regardless of that colour id.
     for (auto* b : { &slotAButton, &slotBButton })
     {
         b->setClickingTogglesState (false);
-        b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (LFlOwLookAndFeel::Colors::primary));
         addAndMakeVisible (b);
     }
     slotAButton.setTooltip ("Switch to compare slot A -- the current settings are kept in slot B "
                              "so you can flip between the two (one undo step)");
     slotBButton.setTooltip ("Switch to compare slot B -- the current settings are kept in slot A "
                              "so you can flip between the two (one undo step)");
+    slotAButton.setTitle ("Slot A"); slotAButton.setDescription (slotAButton.getTooltip());
+    slotBButton.setTitle ("Slot B"); slotBButton.setDescription (slotBButton.getTooltip());
     slotAButton.onClick = [this] { processorRef.getPresetManager().switchToSlot (0); refreshPresetBar(); };
     slotBButton.onClick = [this] { processorRef.getPresetManager().switchToSlot (1); refreshPresetBar(); };
 
     copySlotButton.setTooltip ("Copy the current settings into the inactive compare slot");
+    copySlotButton.setTitle ("Copy");
+    copySlotButton.setDescription (copySlotButton.getTooltip());
     copySlotButton.onClick = [this] { processorRef.getPresetManager().copyActiveToOther(); };
     addAndMakeVisible (copySlotButton);
 }
@@ -387,22 +438,12 @@ void LFlOwAudioProcessorEditor::styleRotary (juce::Slider& s, int textBoxWidth, 
     s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     s.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, textBoxHeight);
 
-    // Phase 7 Task 6 (UX #10 root-cause fix): JUCE's Slider only copies
-    // Slider::textBoxTextColourId into its internal value-box Label when something explicitly
-    // triggers that sync AFTER the text box exists (Component::setColour -> colourChanged() ->
-    // Slider's own copy-into-valueBox). Declaring the colour on the LookAndFeel itself
-    // (LFlOwLookAndFeel's ctor) is NOT enough on its own -- every rotary here was silently
-    // falling back to JUCE's stock white default (0xffffffff) instead of the intended
-    // onSurfaceVariant, confirmed by pixel-sampling a built standalone: Mix "100%", Smooth
-    // "15%", and Xover Lo "250 Hz" all rendered pure white (255,255,255), while Xover Hi's
-    // "2500 Hz" was the ONE exception at the correct dim onSurfaceVariant (144,143,156) -- purely
-    // because refreshXoverHint() happens to call setColour() on that one slider for an unrelated
-    // reason (its clamp/amber tint). That accident is what made Xover Hi look "dimmer than Xover
-    // Lo" (finding #10): Hi was actually the only CORRECTLY styled readout; every other one,
-    // including Lo, was an un-styled stock-white outlier. Fix: force the same explicit sync
-    // here, for every rotary, so Lo's baseline now matches Hi's already-correct unclamped state
-    // pixel-for-pixel (refreshXoverHint's clamped/amber override on Hi is unaffected).
-    s.setColour (juce::Slider::textBoxTextColourId, juce::Colour (LFlOwLookAndFeel::Colors::onSurfaceVariant));
+    // House-LookAndFeel migration: the old finding #10 fix (forcing Slider::textBoxTextColourId
+    // here) is gone. The house LookAndFeel's drawLabel gives every Slider's text box the LCD
+    // phosphor-glass treatment (drawScreen + drawLcdText, always in colour::lcdText) for
+    // Slider-parented Labels specifically, ignoring textBoxTextColourId entirely -- so setting
+    // it here would now be dead code, not a fix. Every rotary's readout is styled by the
+    // LookAndFeel alone, with no per-instance colour call needed (or possible) any more.
 }
 
 void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
@@ -419,6 +460,8 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.chip.setTooltip (laneName + ": when this lane's waveform is Custom, click to enter "
                         "or exit its breakpoint editor in the display above; right-click for "
                         "reset options");
+    s.chip.setTitle (laneName);
+    s.chip.setDescription (s.chip.getTooltip());
     s.chip.onClick = [this, i] { onLaneChipClicked (i); };
     s.chip.onRightClick = [this, i] { showLaneChipMenu (i); };
     addAndMakeVisible (s.chip);
@@ -433,10 +476,13 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     // this borrows real estate from an unlabeled, spec-free column instead of widening the
     // strip's shared column layout (which WOULD risk the min-width no-truncation guarantee for
     // the labeled WAVE/SYNC/RATE/PHASE/DEST/DEPTH columns). setClickingTogglesState(false): the
-    // pill's on/off state is driven by setEditLane, not by its own click (same as the chip).
+    // pill's on/off state is driven by setEditLane, not by its own click (same as the chip). Its
+    // on-state fill/text now come from the house drawToggleButton (accent fill, accentInk text)
+    // via getToggleState(); tickColourId is unused by that override, so it is no longer set here.
     s.editButton.setClickingTogglesState (false);
-    s.editButton.setColour (juce::ToggleButton::tickColourId, juce::Colour (colour));
     s.editButton.setTooltip (laneName + ": draw this lane's shape");
+    s.editButton.setTitle (laneName + " edit");
+    s.editButton.setDescription (s.editButton.getTooltip());
     s.editButton.onClick = [this, i] { onLaneChipClicked (i); };
     addChildComponent (s.editButton); // hidden until refreshEnablement() shows it
 
@@ -451,18 +497,18 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
 
     s.rateSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     s.rateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
-    // Lane knobs (and now the Rate slider's fill) carry lane identity (the LnF default fill
-    // is primary, reserved for global controls) — see drawLinearSlider/drawRotarySlider.
+    // Lane identity: the Rate slider is the one remaining slider styled with a per-lane fill
+    // colour (drawLinearSlider, kept in LFlOwLookAndFeel since the house has no linear-slider
+    // override) -- the rotary knobs below no longer take a fill colour at all, see next comment.
     s.rateSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
-    // Same root-cause fix as styleRotary() (UX #10) -- this Slider's text box needs the same
-    // explicit sync or its readout silently renders JUCE's stock white instead of onSurfaceVariant.
-    s.rateSlider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (LFlOwLookAndFeel::Colors::onSurfaceVariant));
     addAndMakeVisible (s.rateSlider);
 
     styleRotary (s.phaseSlider, 40, 14);
     styleRotary (s.depthSlider, 44, 14);
-    s.phaseSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
-    s.depthSlider.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (colour));
+    // No rotarySliderFillColourId here any more: the house's filmstrip knobs draw their own
+    // pointer and consult no per-slider colour (drawRotarySlider/drawVectorKnob), so the old
+    // per-lane fill that used to feed the hand-drawn arc is now dead weight. Lane identity for
+    // these two stays on the chip/label/Rate slider instead (style guide + migration spec).
     addAndMakeVisible (s.phaseSlider);
     addAndMakeVisible (s.depthSlider);
 
@@ -486,6 +532,17 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.destBox.setTooltip     (laneName + ": what this lane modulates, Volume, Pan, a frequency band, or Pitch");
     // Depth's tooltip is destination-aware (UX #5) -- seeded below via refreshDepthTooltip(),
     // once destAtt exists, so it reads the lane's real initial Dest rather than a hardcoded guess.
+
+    // Accessibility floor (style guide section 8): visible label text as the accessible title,
+    // the tooltip text as the description, for every interactive control.
+    s.waveformBox.setTitle (laneName + " Waveform"); s.waveformBox.setDescription (s.waveformBox.getTooltip());
+    s.syncButton.setTitle  (laneName + " Sync");     s.syncButton.setDescription  (s.syncButton.getTooltip());
+    s.rateSlider.setTitle  (laneName + " Rate");     s.rateSlider.setDescription  (s.rateSlider.getTooltip());
+    s.divisionBox.setTitle (laneName + " Division"); s.divisionBox.setDescription (s.divisionBox.getTooltip());
+    s.rhythmBox.setTitle   (laneName + " Rhythm");   s.rhythmBox.setDescription   (s.rhythmBox.getTooltip());
+    s.phaseSlider.setTitle (laneName + " Phase");    s.phaseSlider.setDescription (s.phaseSlider.getTooltip());
+    s.destBox.setTitle     (laneName + " Destination"); s.destBox.setDescription  (s.destBox.getTooltip());
+    s.depthSlider.setTitle (laneName + " Depth"); // description seeded by refreshDepthTooltip() below
 
     s.waveformAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids.waveform, s.waveformBox);
     s.divisionAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids.division, s.divisionBox);
@@ -823,17 +880,23 @@ void LFlOwAudioProcessorEditor::refreshXoverHint()
     xoverHiClampedState = stateKey;
 
     // Normal state matches every other global label (onSurfaceVariant); the CLAMPED state is
-    // the one that stands out -- amber, the palette's warning tint. (The original logic was
-    // inverted: it brightened the normal state and dimmed the warning.)
+    // the one that stands out -- Colors::warn (the house's meterHot amber), never Colors::lane2
+    // (that now means "lane 3's channel colour", a different signal entirely -- see
+    // LFlOwLookAndFeel.h's Colors::warn doc comment) and never Colors::primary/accent (accent
+    // means "active", not "caution"). Only the caption label's colour carries this any more:
+    // the slider's own LCD readout digits are always drawn in the fixed house lcdText green by
+    // the house LookAndFeel (drawLabel's Slider-parented branch does not consult
+    // Slider::textBoxTextColourId at all), so that old per-instance colour set is gone as
+    // dead code -- see docs/ui_migration_report.md for this trade-off.
     using C = LFlOwLookAndFeel::Colors;
-    const auto colour = juce::Colour (clamped ? C::lane2 : C::onSurfaceVariant);
+    const auto colour = juce::Colour (clamped ? C::warn : C::onSurfaceVariant);
     xoverHighLabel.setColour (juce::Label::textColourId, colour);
-    xoverHighSlider.setColour (juce::Slider::textBoxTextColourId, colour);
 
     juce::String tip = "Crossover between the Mid and High bands";
     if (clamped)
         tip << " (clamped by Low crossover - effective " << effectiveHz << " Hz)";
     xoverHighSlider.setTooltip (tip);
+    xoverHighSlider.setDescription (tip);
 }
 
 void LFlOwAudioProcessorEditor::refreshBandEmphasis()
@@ -898,13 +961,19 @@ void LFlOwAudioProcessorEditor::refreshDepthTooltip (int lane)
         default: tip = laneName + ": Vibrato depth (wobble amount scales with rate)"; break; // Pitch
     }
 
-    laneStrips[(size_t) lane].depthSlider.setTooltip (tip);
+    auto& depthSlider = laneStrips[(size_t) lane].depthSlider;
+    depthSlider.setTooltip (tip);
+    depthSlider.setDescription (tip); // accessibility floor: description tracks the tooltip
 }
 
 void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
 {
     using C = LFlOwLookAndFeel::Colors;
-    g.fillAll (juce::Colour (C::background));
+
+    // Window background = the house chassis gradient (style guide section 2 / migration spec),
+    // in place of the old flat Colors::background fill.
+    g.setGradientFill (zqsfx::ui::gradients::chassis (getLocalBounds().toFloat()));
+    g.fillAll();
 
     constexpr int margin = 12;
 
@@ -913,8 +982,10 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRect (margin, 4, getWidth() - margin * 2, 2);
 
     // Consolidated header line (finding #4/#8): "LFlOw" 16pt bold + "LFO + FLOW" 10pt in a
-    // compact left lockup, Bypass right-aligned in the SAME line (bounds set in resized()) —
-    // the old 40px brand block and Bypass's private row are gone.
+    // compact left lockup, Undo/Redo/Bypass/the ZQ SFX mark right-aligned in the SAME line
+    // (bounds set in resized()). The wordmark keeps its own bespoke bold treatment (style guide
+    // section 1: "logo and wordmark treatment" stays with the product); the subtitle next to it
+    // is a plain label and goes through the house silk font like every other caption.
     auto headerLine = getLocalBounds().reduced (margin).removeFromTop (32);
 
     juce::Font titleFont (juce::FontOptions (16.0f).withStyle ("Bold"));
@@ -923,7 +994,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     const int titleW = (int) std::ceil (juce::TextLayout::getStringWidth (titleFont, "LFlOw")) + 6;
     g.drawText ("LFlOw", headerLine.withWidth (titleW), juce::Justification::centredLeft, false);
 
-    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    g.setFont (lookAndFeel.silkFont (10.0f));
     g.setColour (juce::Colour (C::onSurfaceVariant));
     g.drawText ("LFO + FLOW", headerLine.withTrimmedLeft (titleW + 8),
                 juce::Justification::centredLeft, false);
@@ -931,7 +1002,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     // Painted column-header row (finding #2): "WAVE SYNC RATE PHASE DEST DEPTH", x-aligned to
     // the SAME laneGrid columns layoutLaneStrip() uses (computed once in resized()).
     g.setColour (juce::Colour (C::onSurfaceVariant));
-    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    g.setFont (lookAndFeel.silkFont (10.0f, true));
     auto drawColumnLabel = [&] (const ColumnSlot& c, const char* text)
     {
         juce::Rectangle<int> r (c.x, laneGrid.headerRow.getY(), c.w, laneGrid.headerRow.getHeight());
@@ -948,7 +1019,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     // knobs, so they read as a subordinate group rather than equal-weight controls.
     g.setColour (juce::Colour (C::outline));
     g.fillRect (globalGrid.dividerLine);
-    g.setFont (juce::Font (juce::FontOptions (9.0f)));
+    g.setFont (lookAndFeel.silkFont (9.0f, true));
     // Phase 7 Task 6 (UX #7 + opp #5): quiet (50%) when no lane has a band destination with
     // depth > 0, matching the Xover Lo/Hi knobs' own setAlpha (refreshBandEmphasis) -- this
     // caption is paint()-drawn text, not a Component, so it needs its own alpha here rather
@@ -956,12 +1027,12 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (juce::Colour (C::outline).withAlpha (bandsCaptionQuiet ? 0.5f : 1.0f));
     g.drawText ("BANDS", globalGrid.bandsLabel, juce::Justification::centred, false);
 
-    // Phase 7 Task 6 (UX #6 + opp #5): "L1" badge, lane-1 pink, immediately right of a
-    // following lane's chip -- "ganged to Lane 1" at a glance instead of a flat grey-out (the
+    // Phase 7 Task 6 (UX #6 + opp #5): "L1" badge, lane-1's channel colour, immediately right of
+    // a following lane's chip -- "ganged to Lane 1" at a glance instead of a flat grey-out (the
     // tooltip on the chip itself still spells out exactly what stays per-lane). Uses the
     // chip's own actual bounds (already laid out in layoutLaneStrip/computeLaneColumns) rather
     // than recomputing geometry here.
-    g.setFont (juce::Font (juce::FontOptions (8.0f).withStyle ("Bold")));
+    g.setFont (lookAndFeel.silkFont (8.0f, true));
     for (int i = 0; i < 3; ++i)
     {
         if (! laneFollowing[(size_t) i])
@@ -972,13 +1043,13 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
         auto chipBounds = laneStrips[(size_t) i].chip.getBounds();
         juce::Rectangle<int> badgeArea (chipBounds.getRight() + 1, chipBounds.getY(),
                                          14, chipBounds.getHeight());
-        g.setColour (juce::Colour (LFlOwLookAndFeel::Colors::lane0)); // lane 1's pink
+        g.setColour (juce::Colour (LFlOwLookAndFeel::Colors::lane0)); // lane 1's channel colour
         g.drawText ("L1", badgeArea, juce::Justification::centred, false);
     }
 
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
-    g.setFont (juce::Font (juce::FontOptions (9.0f)));
+    g.setFont (lookAndFeel.silkFont (9.0f));
     g.drawText ("v0.7.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
                 juce::Justification::centredRight, false);
 }
@@ -991,12 +1062,22 @@ void LFlOwAudioProcessorEditor::resized()
     // Header line (~32px): title lockup (painted) + Bypass (component), right-aligned, both
     // in this one line — see paint().
     auto headerLine = area.removeFromTop (32);
+
+    // ZQ SFX mark (style guide section 5): header row, far right of everything else, at least
+    // 24 px tall. Reserved FIRST so it is always the rightmost element; the brand lockup's
+    // painted text (paint()) only ever measures its own string width, so this never needs to
+    // "shrink the title area" at the 620 px minimum width -- there is still ~380px of slack
+    // left for "LFlOw" + "LFO + FLOW" once the mark, Undo/Redo, and Bypass are all carved out
+    // (see the Undo/Redo comment below for the rest of the arithmetic).
+    logo.setBounds (headerLine.removeFromRight (34).withSizeKeepingCentre (28, 28));
+    headerLine.removeFromRight (6);
     bypassButton.setBounds (headerLine.removeFromRight (80).withSizeKeepingCentre (80, 24));
 
     // Phase 7 Task 3 (UX #1): Undo/Redo pills, right of the brand lockup / left of Bypass. This
-    // fixed-width group (2 x 44px + 6+4px gaps = 98px, plus Bypass's 80px = 178px total) leaves
-    // well over 200px of the brand lockup's left-aligned, painted-not-laid-out text free even
-    // at the 620px resize floor (620 - 24 margin - 178 = 418px), so it never truncates.
+    // fixed-width group (2 x 44px + 6+4px gaps = 98px, plus Bypass's 80px + the logo's 34+6px =
+    // 218px total) leaves well over 200px of the brand lockup's left-aligned, painted-not-laid-
+    // out text free even at the 620px resize floor (620 - 24 margin - 218 = 378px), so it never
+    // truncates.
     headerLine.removeFromRight (6);
     redoButton.setBounds (headerLine.removeFromRight (44).withSizeKeepingCentre (44, 22));
     headerLine.removeFromRight (4);
@@ -1101,6 +1182,11 @@ void LFlOwAudioProcessorEditor::resized()
 
     globalGrid.bandsLabel = juce::Rectangle<int> (xoverLowArea.getX(), globalRow.getY() - 12,
                                                    xoverHighArea.getRight() - xoverLowArea.getX(), 12);
+
+    // layoutLaneStrip() above just reset every lane's name label to its untrimmed bounds, which
+    // puts a following lane's name back under its "L1" badge until the next timer tick re-trims
+    // it (a one-frame overlap on every resize, and permanent in a headless render).
+    refreshEnablement();
 }
 
 void LFlOwAudioProcessorEditor::computeLaneColumns (juce::Rectangle<int> rowBounds)

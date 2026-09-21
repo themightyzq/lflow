@@ -12,7 +12,7 @@ TEST_CASE ("syncedHz converts bpm + cycle-beats to cycles per second", "[lfocloc
     REQUIRE_THAT (LfoClock::syncedHz (120.0, 4.0), WithinAbs (0.5, 1e-9)); // whole @120 = 0.5 Hz
 }
 
-TEST_CASE ("advance accumulates and wraps to [0,1)", "[lfoclock]")
+TEST_CASE ("advance accumulates and wraps into the half-open range 0 to 1", "[lfoclock]")
 {
     LfoClock c; c.prepare (100.0); c.reset (0.0);
     REQUIRE_THAT (c.advance (10.0), WithinAbs (0.1, 1e-9)); // 10 Hz / 100 sr = 0.1 / sample

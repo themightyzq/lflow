@@ -19,6 +19,58 @@ bool laneNodesEqual (const std::vector<lflow::ShapeNode>& a, const std::vector<l
 
     return true;
 }
+
+// Lane identity is never colour alone (style guide section 3 / accessibility floor section 8
+// item 5): when the 3 lanes' curves overlay in the same screen distinguished only by colour,
+// each also gets a distinct dash pattern -- lane 1 solid, lane 2 dashed, lane 3 dotted. Applies
+// the AffineTransform to the path first (device space) so the dash lengths and stroke
+// thickness passed here are real screen pixels, matching the plain (lane 0) strokePath call's
+// own thickness units.
+void strokeLaneCurve (juce::Graphics& g, const juce::Path& unitPath, const juce::AffineTransform& transform,
+                      float thickness, int laneIndex)
+{
+    if (laneIndex == 0)
+    {
+        g.strokePath (unitPath, juce::PathStrokeType (thickness), transform);
+        return;
+    }
+
+    juce::Path devicePath (unitPath);
+    devicePath.applyTransform (transform);
+
+    juce::Path dashed;
+    if (laneIndex == 1)
+    {
+        float dashLengths[] = { 7.0f, 4.0f };
+        juce::PathStrokeType (thickness).createDashedStroke (dashed, devicePath, dashLengths, 2);
+    }
+    else
+    {
+        float dashLengths[] = { 1.5f, 3.0f };
+        juce::PathStrokeType (thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded)
+            .createDashedStroke (dashed, devicePath, dashLengths, 2);
+    }
+    g.fillPath (dashed);
+}
+
+// The house LookAndFeel's drawLcdText()/lcdFont() are non-static (they read the loaded font
+// typefaces), so text drawn on this phosphor screen goes through whatever LookAndFeel is
+// currently installed (always LFlOwLookAndFeel, a zqsfx::ui::LookAndFeel subclass, in this
+// plugin). Falls back to a plain generic-font drawText if that is ever not the case (e.g. a
+// component temporarily under a different LookAndFeel), so this never crashes or draws nothing.
+void drawScreenText (juce::Component& c, juce::Graphics& g, const juce::String& text,
+                     juce::Rectangle<int> area, float px, juce::Justification just,
+                     juce::Colour colour)
+{
+    if (auto* houseLnF = dynamic_cast<zqsfx::ui::LookAndFeel*> (&c.getLookAndFeel()))
+        houseLnF->drawLcdText (g, text, area, px, just, colour);
+    else
+    {
+        g.setColour (colour);
+        g.setFont (juce::FontOptions (px));
+        g.drawText (text, area, just);
+    }
+}
 } // namespace
 
 void LfoDisplay::setLane (int lane, lflow::Waveform waveform, float phaseOffset01, bool active)
@@ -432,17 +484,23 @@ void LfoDisplay::showResetCurveMenu()
 
 void LfoDisplay::paint (juce::Graphics& g)
 {
-    using C = LFlOwLookAndFeel::Colors;
+    namespace colour = zqsfx::ui::colour;
+
     auto r = getLocalBounds().toFloat().reduced (6.0f);
-    g.setColour (juce::Colour (C::surface));
-    g.fillRoundedRectangle (r, 6.0f);
-    g.setColour (juce::Colour (C::outline));
-    g.drawRoundedRectangle (r, 6.0f, 1.0f);
+    // The house phosphor-screen treatment (style guide section 6 / migration spec): bezel,
+    // LCD glass, phosphor wash, scanlines -- one call, shared with every other LCD readout in
+    // the house look.
+    zqsfx::ui::LookAndFeel::drawScreen (g, r, true);
+    // NOTE: `r` here is deliberately identical to displayArea()'s own
+    // getLocalBounds().reduced(6.0f) -- hit-testing (nodeToScreen/findNodeNear/findHandleNear)
+    // keys off displayArea(), so the curves/gridlines drawn against this same `r` must never
+    // drift from it by even a pixel.
 
     // Gridlines (finding #8): faint quarter-cycle verticals + a dotted 50% center line, both
-    // free legibility aids for phase offsets and drawn shapes. Drawn behind the lane curves.
+    // free legibility aids for phase offsets and drawn shapes. Drawn behind the lane curves, in
+    // the house's lcdFaint2 tone (style guide: "grid lines in lcdFaint2").
     {
-        g.setColour (juce::Colour (C::outline).withAlpha (0.5f));
+        g.setColour (colour::lcdFaint2.withAlpha (0.6f));
         for (float frac : { 0.25f, 0.5f, 0.75f })
         {
             const float x = r.getX() + frac * r.getWidth();
@@ -455,7 +513,7 @@ void LfoDisplay::paint (juce::Graphics& g)
         float dashLengths[] = { 2.0f, 3.0f };
         juce::Path dashed;
         juce::PathStrokeType (1.0f).createDashedStroke (dashed, centerLine, dashLengths, 2);
-        g.setColour (juce::Colour (C::outline).withAlpha (0.7f));
+        g.setColour (colour::lcdFaint2.withAlpha (0.85f));
         g.fillPath (dashed);
     }
 
@@ -524,7 +582,7 @@ void LfoDisplay::paint (juce::Graphics& g)
             // it was effectively invisible, giving no clue lanes 2-3 existed.
             const float alpha = (editLane >= 0) ? 0.12f : (lane.active ? 1.0f : 0.55f);
             g.setColour (colour.withMultipliedAlpha (alpha));
-            g.strokePath (lane.path, juce::PathStrokeType (lane.active ? 2.0f : 1.0f), transform);
+            strokeLaneCurve (g, lane.path, transform, lane.active ? 2.0f : 1.0f, i);
         }
 
         if (lane.active)
@@ -558,28 +616,24 @@ void LfoDisplay::paint (juce::Graphics& g)
     // -- deliberately NOT folded into displayArea()/the transform above, since that geometry
     // also drives hit-testing (nodeToScreen/findNodeNear/findHandleNear) and must stay exactly
     // as the mouse handlers expect it; this is a paint-time-only overlay.
+    // Text on the phosphor screen goes through the house LCD glow treatment
+    // (drawLcdText/lcdFont) rather than a plain generic-font drawText.
     if (editLane >= 0)
     {
-        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+        auto tagArea = juce::Rectangle<int> ((int) r.getX() + 4, (int) r.getY() + 2, 140, 12);
+        drawScreenText (*this, g, "editing Lane " + juce::String (editLane + 1), tagArea, 15.0f,
+                        juce::Justification::centredLeft, juce::Colour (LFlOwLookAndFeel::laneColour (editLane)));
 
-        g.setColour (juce::Colour (LFlOwLookAndFeel::laneColour (editLane)));
-        auto tagArea = juce::Rectangle<float> (r.getX() + 4.0f, r.getY() + 2.0f, 140.0f, 12.0f);
-        g.drawText ("editing Lane " + juce::String (editLane + 1), tagArea,
-                    juce::Justification::centredLeft, false);
-
-        g.setColour (juce::Colour (C::onSurfaceVariant));
-        auto hintArea = juce::Rectangle<float> (r.getX(), r.getBottom() - 14.0f, r.getWidth(), 12.0f);
-        g.drawText ("click: add   drag: move / bend   double-click: delete   shift: snap", hintArea,
-                    juce::Justification::centred, false);
+        auto hintArea = juce::Rectangle<int> ((int) r.getX(), (int) r.getBottom() - 14, (int) r.getWidth(), 12);
+        drawScreenText (*this, g, "click: add   drag: move / bend   double-click: delete   shift: snap",
+                        hintArea, 13.0f, juce::Justification::centred, colour::lcdDim);
     }
 
     // Phase 7 Task 6 (UX #9): "BYPASSED" tag, top-right, painted last so it sits on top of
-    // everything else. ASCII, onSurfaceVariant (a neutral state label, not a warning), 10pt.
+    // everything else. ASCII, a neutral LCD-dim state label (not a warning -- lcdDim, not warn).
     if (bypassed)
     {
-        g.setFont (juce::Font (juce::FontOptions (10.0f)));
-        g.setColour (juce::Colour (C::onSurfaceVariant));
-        auto tagArea = juce::Rectangle<float> (r.getRight() - 84.0f, r.getY() + 2.0f, 80.0f, 12.0f);
-        g.drawText ("BYPASSED", tagArea, juce::Justification::centredRight, false);
+        auto tagArea = juce::Rectangle<int> ((int) r.getRight() - 84, (int) r.getY() + 2, 80, 12);
+        drawScreenText (*this, g, "BYPASSED", tagArea, 15.0f, juce::Justification::centredRight, colour::lcdDim);
     }
 }

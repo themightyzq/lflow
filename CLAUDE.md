@@ -39,11 +39,15 @@ thread) strictly separated.
 ## UI & build house standards (binding)
 Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.md` (both are
 now pointer stubs to the canonical copies in `../docs/`; fix the canonical copy, not the stub):
-- All colors come from `LFlOwLookAndFeel::Colors` (LFlOw = Modulation → pink `#ff6bb5`); never
-  hardcode `juce::Colours::` in editor/gui code. The house look is migrating to a shared design
-  system baselined on Broken (`../docs/ZQSFX_UI_STYLE_GUIDE.md`, draft) — LFlOw has not migrated
-  yet, and this meaning-carrying colour rule (lanes, Modulation pink) is preserved through any
-  future restyle.
+- LFlOw uses the ZQ SFX house UI (shared `zqsfx_ui` module, fetched by tag in CMakeLists.txt;
+  spec `../docs/ZQSFX_UI_STYLE_GUIDE.md`; migrated 2026-09-21, see `docs/ui_migration_report.md`).
+  `LFlOwLookAndFeel` is a thin subclass of `zqsfx::ui::LookAndFeel`. All colors still come from
+  `LFlOwLookAndFeel::Colors`, whose values mirror house tokens; never hardcode `juce::Colours::`
+  in editor/gui code. Lanes 1/2/3 are the colour-blind-safe channels sky/yellow/purple, and lane
+  identity is never colour alone (numbered chip, solid/dashed/dotted curves). The accent orange
+  means "active" only. The header mark (`zqsfx::ui::LogoMark`) is the About button.
+- UI gate: `lflow_ui_snapshot <out.png> [scale] [w h]` renders the editor headlessly; render
+  before and after any UI change and compare (`docs/ui_before.png` / `ui_after.png`).
 - Generic fonts only (`juce::FontOptions(size)`, never "Arial"); ASCII-only displayed strings
   (no `deg`/`->`/`-inf` Unicode); every interactive control has a tooltip; editor holds a
   `juce::TooltipWindow`.
@@ -76,7 +80,7 @@ Versioning: semver in CMake `project(... VERSION ...)`.
 This project uses **Diversion** (`dv` CLI at `~/.diversion/bin/dv`) as the authoritative VCS,
 per ../CLAUDE.md section 3. Do not run `git commit`/branch/PR flows for project work. Use
 Diversion's workflow (`dv status`, `dv commit`, etc.). A local `git` repository also exists
-(no remote configured, currently on branch `chore/zqsfx-identity` off `main`); it is not the
+(no remote configured, branch `phase1-chopper-clone`); it is not the
 source of truth and is not a publishing target. Its `.diversion/` workspace marker was
 accidentally tracked by git and has since been untracked (`git rm --cached`) — never re-add it.
 

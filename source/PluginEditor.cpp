@@ -109,6 +109,16 @@ void LFlOwAudioProcessorEditor::LaneChip::setFollowing (bool following)
 LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
+    // Editor size persistence: read the saved size back BEFORE anything below can move it.
+    // setResizeLimits() (further down) clamps the editor's bounds to its new minimum as a side
+    // effect (AudioProcessorEditor::setResizeLimits() -> setBoundsConstrained(getBounds()), and
+    // the editor starts at the Component default of 0x0) -- that clamp is itself a real size
+    // change and fires resized(), which (see below) writes the CURRENT size back to the
+    // processor. Reading the stored size here, first, means that transient 620x560 write can
+    // never be mistaken for a genuine saved session size.
+    const int storedWidth = processorRef.getEditorWidth();
+    const int storedHeight = processorRef.getEditorHeight();
+
     setLookAndFeel (&lookAndFeel);
     auto& apvts = processorRef.getAPVTS();
 
@@ -227,7 +237,27 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
 
     setResizable (true, true);
     setResizeLimits (620, 560, 1000, 900);
-    setSize (700, 620);
+
+    // Editor size persistence: apply the size captured at the top of this ctor (see the comment
+    // there) if it looks like a genuine saved session size -- non-zero and within the
+    // constrainer just installed by setResizeLimits() above (guards against a stale/corrupt
+    // saved value or a resize-limits change since it was saved). Otherwise fall back to the
+    // plugin's normal default size. This setSize() is the last word on the constructor's initial
+    // size; resized() (below) then persists whatever size actually results.
+    int initialWidth = 700, initialHeight = 620;
+    if (storedWidth > 0 && storedHeight > 0)
+    {
+        if (auto* c = getConstrainer())
+        {
+            if (storedWidth >= c->getMinimumWidth() && storedWidth <= c->getMaximumWidth()
+                && storedHeight >= c->getMinimumHeight() && storedHeight <= c->getMaximumHeight())
+            {
+                initialWidth = storedWidth;
+                initialHeight = storedHeight;
+            }
+        }
+    }
+    setSize (initialWidth, initialHeight);
     startTimerHz (60);
 
     // NOTE (Phase 7 final review): no explicit grabKeyboardFocus() anywhere --
@@ -322,6 +352,15 @@ void LFlOwAudioProcessorEditor::buildPresetBar()
     copySlotButton.setDescription (copySlotButton.getTooltip());
     copySlotButton.onClick = [this] { processorRef.getPresetManager().copyActiveToOther(); };
     addAndMakeVisible (copySlotButton);
+
+    // Rename (USER presets only) -- enablement + the state-dependent half of the tooltip are
+    // set from refreshPresetBar(); title/description are fixed. Disabled by default until the
+    // first refreshPresetBar() call below runs (factory/"Init" is the safe starting state).
+    renameButton.setTitle ("Rename preset");
+    renameButton.setDescription ("Rename the currently loaded user preset");
+    renameButton.onClick = [this] { startRenameDialog(); };
+    renameButton.setEnabled (false);
+    addAndMakeVisible (renameButton);
 }
 
 void LFlOwAudioProcessorEditor::refreshPresetBar()
@@ -336,6 +375,14 @@ void LFlOwAudioProcessorEditor::refreshPresetBar()
     const int active = manager.getActiveSlot();
     slotAButton.setToggleState (active == 0, juce::dontSendNotification);
     slotBButton.setToggleState (active == 1, juce::dontSendNotification);
+
+    // Rename is a USER-preset-only affordance: enabled iff the current preset name resolves to
+    // an actual file under getUserPresetDir() (factory presets and "Init" have no backing file).
+    const bool isUserPreset = currentUserPresetFile().existsAsFile();
+    renameButton.setEnabled (isUserPreset);
+    renameButton.setTooltip (isUserPreset
+        ? "Rename the current user preset"
+        : "Factory presets can't be renamed -- select or save a user preset first");
 }
 
 void LFlOwAudioProcessorEditor::showPresetMenu()
@@ -427,6 +474,76 @@ void LFlOwAudioProcessorEditor::startSaveAsDialog()
                 const auto name = dialog->getTextEditorContents ("name").trim();
                 if (name.isNotEmpty())
                     safeThis->processorRef.getPresetManager().saveUserPreset (name);
+            }
+            safeThis->refreshPresetBar();
+        }),
+        false); // deleteWhenDismissed=false: the member unique_ptr owns the window
+}
+
+juce::File LFlOwAudioProcessorEditor::currentUserPresetFile() const
+{
+    const auto current = processorRef.getPresetManager().getCurrentPresetName();
+    for (auto& f : lflow::PresetManager::getUserPresetFiles())
+        if (f.getFileNameWithoutExtension() == current)
+            return f;
+    return {}; // invalid/default File -- not a user preset (factory preset, or "Init")
+}
+
+void LFlOwAudioProcessorEditor::startRenameDialog()
+{
+    const auto file = currentUserPresetFile();
+    if (! file.existsAsFile())
+        return; // renameButton should already be disabled in this case; belt-and-braces.
+
+    // Non-modal (JUCE 8), same pattern/lifetime as startSaveAsDialog() above.
+    renameDialog = std::make_unique<juce::AlertWindow> ("Rename preset", "New name:",
+                                                         juce::MessageBoxIconType::NoIcon, this);
+    renameDialog->setLookAndFeel (&lookAndFeel);
+    renameDialog->addTextEditor ("name", file.getFileNameWithoutExtension());
+    renameDialog->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    renameDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    juce::Component::SafePointer<LFlOwAudioProcessorEditor> safeThis (this);
+    renameDialog->enterModalState (true,
+        juce::ModalCallbackFunction::create ([safeThis, file] (int result)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto dialog = std::move (safeThis->renameDialog);
+            if (dialog == nullptr)
+                return;
+            dialog->setLookAndFeel (nullptr);
+            dialog->setVisible (false);
+
+            if (result == 1)
+            {
+                const auto newName = dialog->getTextEditorContents ("name");
+                const auto outcome = safeThis->processorRef.getPresetManager()
+                                          .renameUserPreset (file, newName);
+                if (outcome != lflow::PresetManager::RenameOutcome::Success)
+                {
+                    juce::String message;
+                    switch (outcome)
+                    {
+                        case lflow::PresetManager::RenameOutcome::EmptyName:
+                            message = "Preset name can't be empty.";
+                            break;
+                        case lflow::PresetManager::RenameOutcome::InvalidName:
+                            message = "That name isn't valid for a file (no / or \\ characters).";
+                            break;
+                        case lflow::PresetManager::RenameOutcome::NameClash:
+                            message = "Another user preset already has that name.";
+                            break;
+                        case lflow::PresetManager::RenameOutcome::FileError:
+                            message = "The preset file couldn't be renamed on disk.";
+                            break;
+                        case lflow::PresetManager::RenameOutcome::Success:
+                            break; // unreachable (guarded above)
+                    }
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                             "Rename failed", message);
+                }
             }
             safeThis->refreshPresetBar();
         }),
@@ -1085,17 +1202,19 @@ void LFlOwAudioProcessorEditor::resized()
 
     area.removeFromTop (4);
 
-    // Phase 7 Task 4 (UX #2): preset bar row -- [<] [name] [>] [v] ... [A] [B] [Copy]. All
-    // widths fixed except the name label, which absorbs the slack: at the 620px floor that is
-    // 620 - 24 (margins) - 88 (prev/next/menu + gaps) - 12 (group gap) - 104 (A/B/Copy) =
-    // 392px of name space -- no truncation risk for any factory or sane user preset name.
+    // Phase 7 Task 4 (UX #2): preset bar row -- [<] [name] [>] [v] ... [A] [B] [Copy] [Rename].
+    // All widths fixed except the name label, which absorbs the slack: at the 620px floor that
+    // is 620 - 24 (margins) - 88 (prev/next/menu + gaps) - 12 (group gap) - 172 (A/B/Copy/Rename)
+    // = 324px of name space -- no truncation risk for any factory or sane user preset name.
     auto presetBar = area.removeFromTop (24);
-    auto abGroup = presetBar.removeFromRight (24 + 4 + 24 + 4 + 48);
+    auto abGroup = presetBar.removeFromRight (24 + 4 + 24 + 4 + 48 + 8 + 60);
     slotAButton.setBounds (abGroup.removeFromLeft (24));
     abGroup.removeFromLeft (4);
     slotBButton.setBounds (abGroup.removeFromLeft (24));
     abGroup.removeFromLeft (4);
-    copySlotButton.setBounds (abGroup);
+    copySlotButton.setBounds (abGroup.removeFromLeft (48));
+    abGroup.removeFromLeft (8);
+    renameButton.setBounds (abGroup); // remaining 60px -- >=22px hit target on both axes
     presetBar.removeFromRight (12);
 
     presetPrevButton.setBounds (presetBar.removeFromLeft (24));
@@ -1187,6 +1306,12 @@ void LFlOwAudioProcessorEditor::resized()
     // puts a following lane's name back under its "L1" badge until the next timer tick re-trims
     // it (a one-frame overlap on every resize, and permanent in a headless render).
     refreshEnablement();
+
+    // Editor size persistence: record the current size on the processor on every resize (drag-
+    // resize, host-driven resize, or the constructor's own initial setSize() above) so it rides
+    // the next getStateInformation() call. Cheap atomic stores; see the processor's
+    // setEditorSize() doc comment for why this must not touch apvts.state.
+    processorRef.setEditorSize (getWidth(), getHeight());
 }
 
 void LFlOwAudioProcessorEditor::computeLaneColumns (juce::Rectangle<int> rowBounds)

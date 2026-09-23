@@ -181,9 +181,18 @@ private:
     juce::Label presetNameLabel;
     juce::TextButton slotAButton { "A" }, slotBButton { "B" }, copySlotButton { "Copy" };
 
+    // Rename control for the currently loaded USER preset only -- disabled (with an explanatory
+    // tooltip) when the current preset is a factory preset or "Init", since those have no
+    // backing file to rename. Enablement/tooltip refreshed alongside the rest of the preset bar
+    // in refreshPresetBar(); see currentUserPresetFile() and PresetManager::renameUserPreset().
+    juce::TextButton renameButton { "Rename" };
+
     // Save As dialog, JUCE 8 non-modal pattern (enterModalState + ModalCallbackFunction, no
     // runModalLoop) -- kept as a member so it outlives the ctor scope; reused per invocation.
     std::unique_ptr<juce::AlertWindow> saveDialog;
+
+    // Rename dialog, same non-modal pattern/lifetime as saveDialog above.
+    std::unique_ptr<juce::AlertWindow> renameDialog;
 
     // Throttle counter for refreshPresetBar(): the dirty check deep-compares the state tree
     // (see PresetManager::isDirty()), which is cheap but not 60-Hz-free-cheap, so the bar
@@ -244,6 +253,15 @@ private:
     void refreshPresetBar();
     void showPresetMenu();
     void startSaveAsDialog();
+
+    // Rename control plumbing (USER presets only). currentUserPresetFile() resolves the
+    // currently-loaded preset name to its file under PresetManager::getUserPresetDir(), or an
+    // invalid (default) juce::File when the current preset is factory/"Init" -- shared by
+    // refreshPresetBar() (button enablement) and startRenameDialog() (which file to rename).
+    // startRenameDialog() opens the non-modal prompt, prefilled with the current name, and
+    // reports any PresetManager::RenameOutcome failure via an AlertWindow message box.
+    juce::File currentUserPresetFile() const;
+    void startRenameDialog();
 
     // Computes laneGrid's column x-positions/widths from the available row bounds (spec
     // minimums as floors; the rate slot absorbs any extra width as the window widens). Called

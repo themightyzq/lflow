@@ -220,7 +220,16 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
 void LFlOwAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = apvts.copyState().createXml())
+    // Editor size rides this saved-state tree as two extra root properties -- see the header's
+    // getEditorWidth()/getEditorHeight()/setEditorSize() doc comment for why they must NOT be
+    // written onto the live apvts.state tree that PresetManager deep-compares for its dirty
+    // flag. copyState() returns a fresh ValueTree::createCopy() (see its own JUCE doc), so
+    // setting properties on this local copy cannot leak back into apvts.state.
+    auto state = apvts.copyState();
+    state.setProperty ("editor_width", getEditorWidth(), nullptr);
+    state.setProperty ("editor_height", getEditorHeight(), nullptr);
+
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, dest);
 }
 
@@ -242,6 +251,18 @@ void LFlOwAudioProcessor::setStateInformation (const void* data, int size)
     auto tree = juce::ValueTree::fromXml (*xml);
     if (! tree.isValid())
         return;
+
+    // Editor size (see getStateInformation): read the two extra root properties back, then
+    // strip them from `tree` BEFORE it becomes (or is folded into) the live apvts.state --
+    // PresetManager deep-compares that tree for its dirty flag (isDirty()/captureState()) and
+    // would misreport "dirty" on every resize if these properties reached it. Reading/storing
+    // is safe on whatever thread called us: getProperty() is a plain read on a tree nothing else
+    // references yet, and setEditorSize()'s atomics need no synchronization. Absent properties
+    // (older sessions) default to 0, which the editor's ctor treats as "use the default size".
+    setEditorSize (static_cast<int> (tree.getProperty ("editor_width", 0)),
+                   static_cast<int> (tree.getProperty ("editor_height", 0)));
+    tree.removeProperty ("editor_width", nullptr);
+    tree.removeProperty ("editor_height", nullptr);
 
     if (juce::MessageManager::getInstance()->isThisTheMessageThread())
     {

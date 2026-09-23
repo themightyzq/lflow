@@ -281,6 +281,50 @@ bool PresetManager::loadUserPresetFile (const juce::File& file)
     return true;
 }
 
+PresetManager::RenameOutcome PresetManager::renameUserPreset (const juce::File& file,
+                                                               const juce::String& newNameIn)
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+
+    const auto newName = newNameIn.trim();
+    if (newName.isEmpty())
+        return RenameOutcome::EmptyName;
+
+    // Reject a path separator outright rather than silently sanitising it away -- a name that
+    // came in with one almost certainly means the user (or a caller) meant something other than
+    // a flat file name.
+    if (newName.containsChar ('/') || newName.containsChar ('\\'))
+        return RenameOutcome::InvalidName;
+
+    // createLegalFileName() strips characters the filesystem can't hold (":", control chars,
+    // etc.). If that changes the string, the trimmed input already contained one of those, so
+    // it's the same "reject, don't silently mangle" call as the separator check above.
+    const auto legal = juce::File::createLegalFileName (newName);
+    if (legal.isEmpty() || legal != newName)
+        return RenameOutcome::InvalidName;
+
+    for (auto& existing : getUserPresetFiles())
+        if (existing != file && existing.getFileNameWithoutExtension().equalsIgnoreCase (legal))
+            return RenameOutcome::NameClash;
+
+    const auto oldName = file.getFileNameWithoutExtension();
+    const auto newFile = file.getSiblingFile (legal + ".lflowpreset");
+
+    // File::moveFileTo() already does the right thing for a pure case change on a case-
+    // insensitive filesystem (skips the usual "delete the destination first" step when source
+    // and destination name the same file, then renames directly) -- see juce_File.cpp.
+    if (! file.moveFileTo (newFile))
+        return RenameOutcome::FileError;
+
+    if (currentName == oldName)
+        currentName = legal;
+    for (auto& slotName : slotNames)
+        if (slotName == oldName)
+            slotName = legal;
+
+    return RenameOutcome::Success;
+}
+
 void PresetManager::loadNeighbour (int delta)
 {
     // Combined ordered list: factory presets first, then user preset files (filename order).

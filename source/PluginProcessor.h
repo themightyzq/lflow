@@ -105,6 +105,23 @@ public:
         return (lane >= 0 && lane < lflow::MultiLaneEngine::kNumLanes) ? laneValueAtomic[(size_t) lane].load() : 0.0f;
     }
 
+    // Editor size persistence. The editor is transient (closed/reopened by the host), so its
+    // last size is kept here on the processor and rides the DAW plugin state (getStateInformation/
+    // setStateInformation), NOT the live apvts.state tree -- PresetManager deep-compares
+    // apvts.state for its dirty flag (see PresetManager::captureState()/isDirty()), and folding
+    // these two properties into that tree would misreport "dirty" on every resize. 0x0 means
+    // "never set" / absent (older sessions, or a fresh instance) -- the editor's ctor treats that
+    // as "use the default size". Message-thread only, like everything else editor-related; the
+    // atomics exist only so a host's off-thread setStateInformation (see its own comment) can
+    // store the value without a lock.
+    int getEditorWidth() const noexcept { return editorWidth.load(); }
+    int getEditorHeight() const noexcept { return editorHeight.load(); }
+    void setEditorSize (int width, int height) noexcept
+    {
+        editorWidth.store (width);
+        editorHeight.store (height);
+    }
+
 private:
     // Phase 7 Task 3 (UX #1): must be declared/constructed BEFORE apvts below -- its ctor
     // initializer list passes `&undoManager` to AudioProcessorValueTreeState's constructor, and
@@ -149,6 +166,10 @@ private:
 
     std::atomic<float> lanePhaseAtomic[lflow::MultiLaneEngine::kNumLanes] {};
     std::atomic<float> laneValueAtomic[lflow::MultiLaneEngine::kNumLanes] {};
+
+    // See getEditorWidth()/getEditorHeight()/setEditorSize() above. 0 = unset.
+    std::atomic<int> editorWidth { 0 };
+    std::atomic<int> editorHeight { 0 };
 
     // QA M1: setStateInformation() can be called by a host off the message thread. It marshals
     // the actual apvts.replaceState() apply over to the message thread via

@@ -55,6 +55,27 @@ public:
     bool saveUserPreset (const juce::String& name);      // false on write failure
     bool loadUserPresetFile (const juce::File& file);    // false on parse failure
 
+    // Result of renameUserPreset(), surfaced to the editor so its AlertWindow can show a
+    // specific reason instead of a generic failure.
+    enum class RenameOutcome
+    {
+        Success,
+        EmptyName,     // blank/whitespace-only new name
+        InvalidName,   // contains a path separator, or an illegal-for-filenames character
+        NameClash,     // another *existing* user preset already has this name (case-insensitive)
+        FileError      // the on-disk rename itself failed (permissions, file went missing, ...)
+    };
+
+    // Renames a user preset's file on disk (LFlOw's .lflowpreset format stores no name inside
+    // the file -- see saveUserPreset() -- so the filename IS the name; nothing else needs
+    // updating on disk). Validates non-empty, no path separators, and no case-insensitive name
+    // clash with a DIFFERENT existing user preset (a pure case change on `file` itself is not a
+    // clash and is applied). On success, also updates `currentName`/`slotNames` wherever they
+    // still referenced the old name, so the displayed current-preset name and A/B slot labels
+    // follow the rename. Does not rescan any cached list (there isn't one -- getUserPresetFiles()
+    // always reads the directory live); the caller re-lists afterward if it needs to.
+    RenameOutcome renameUserPreset (const juce::File& file, const juce::String& newName);
+
     // Steps through the combined factory + user preset list (factory first, then user files
     // in filename order), wrapping at both ends. If the current preset name isn't in the list
     // (e.g. "Init" or a deleted user preset), +1 starts at the first entry and -1 at the last.

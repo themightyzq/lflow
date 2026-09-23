@@ -1,117 +1,58 @@
 # LFlOw
 
-LFlOw ("LFO + FLOW", `PRODUCT_NAME "LFlOw"` in CMakeLists.txt) is a
-cross-platform multi-lane LFO / modulation FX plugin built on JUCE, by
-ZQ SFX. Feature-complete at v0.7.0 (2026-07-03, per `CLAUDE.md`): 3
-linked/unlinkable LFO lanes routed to Volume, Pan, 3-band levels (LR4
-crossovers, `source/dsp/LR4Crossover.h`), or Pitch (vibrato via mod delay,
-`source/dsp/ModDelay.h`); drawable custom shapes with in-display
-breakpoint editing (`source/shapes/ShapeManager.cpp`); undo/redo; factory
-and user presets with A/B compare; a custom `LFlOwLookAndFeel`; a
-resizable UI.
+LFlOw (LFO + Flow) is a multi-lane modulation plugin. It gives you three LFO
+lanes, each routable to volume, pan, one of three frequency bands, or pitch
+for vibrato. Lanes can run independently or be linked together. Shapes can
+be drawn by hand right in the display, with breakpoint editing for fine
+control, and undo/redo covers every edit. It ships VST3, AU, and Standalone
+on macOS, and VST3 on Windows and Linux.
 
-Remaining work is release mechanics (signing/notarization/Soundminer
-install — see host-compat docs below) plus roadmap features (retrigger
-modes, stereo spread, preset morphing).
+## Install
 
-## Formats
+There are no packaged releases yet; build from source (below). On macOS,
+the built plugin and standalone app are unsigned, so first launch needs
+right-click, Open.
 
-`VST3` + `Standalone` everywhere; `AU` is added only on Apple:
+## Use
 
-```cmake
-set(LFLOW_FORMATS VST3 Standalone)
-if(APPLE)
-    list(APPEND LFLOW_FORMATS AU)
-endif()
+1. Pick a lane (1, 2, or 3) and choose its destination: Volume, Pan, one of
+   the three frequency bands, or Pitch (vibrato).
+2. Draw or pick a shape for the lane in the display; drag its breakpoints
+   to reshape it.
+3. Link lanes together, or leave them independent, depending on whether you
+   want them moving in lockstep.
+4. Undo and redo cover every edit, and A/B compare lets you flip between
+   two states while you dial things in.
+
+### Presets
+
+Factory presets are ready to load, and you can save your own alongside
+them. User presets are XML files written to:
+
+```
+~/Library/Audio/Presets/ZQ SFX/LFlOw/
 ```
 
-## Requirements
+## Build from source
 
-- CMake 3.22+
-- C++17
-- JUCE 8.0.14 and Catch2 v3.5.2, both fetched automatically via CMake
-  `FetchContent`
-- macOS builds are Universal Binary (arm64 + x86_64, forced via
-  `CMAKE_OSX_ARCHITECTURES` when `APPLE`)
-
-## Build
+Requirements: CMake 3.22+, a C++17 compiler, JUCE 8.0.14 and Catch2
+(fetched automatically by CMake). macOS builds are Universal Binary
+(arm64 + x86_64).
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target LFlOw_Standalone -j   # standalone only, for quick testing
 cmake --build build --target LFlOw_All -j          # all configured formats
 ```
 
-JUCE is pinned to tag `8.0.14` in `CMakeLists.txt`; bump it deliberately,
-not as a side effect of other work.
-
-## Tests
-
-Headless Catch2 tests (`lflow_tests`) run against `lflow_dsp`, a pure
-C++ static library (`source/dsp/MultiLaneEngine.cpp`) with no JUCE
-dependency, covering biquads, the LR4 crossover, LFO core/clock/sync-rate,
-lane params, the multi-lane engine, the shape model, the triple buffer, and
-mod delay:
+Run the unit tests with:
 
 ```bash
 cmake --build build --target lflow_tests -j && ./build/lflow_tests
 ```
 
-## Presets
-
-User presets are XML `*.lflowpreset` files written by
-`source/presets/PresetManager.cpp` (`PresetManager::getUserPresetDir()`) to:
-
-```
-<home>/Library/Audio/Presets/ZQ SFX/LFlOw
-```
-
-The code builds this path from JUCE's `File::getSpecialLocation
-(userHomeDirectory)` with no platform-specific branch, so the same
-`Library/Audio/Presets/ZQ SFX/LFlOw` suffix is appended under the user's
-home directory on every platform the plugin runs on, not only macOS.
-
-## Project layout
-
-```
-source/PluginProcessor.{h,cpp}, PluginEditor.{h,cpp}   plugin entry points
-source/dsp/         pure C++ DSP (no JUCE headers), unit-tested headless
-source/gui/         LFlOwLookAndFeel, LfoDisplay
-source/params/      ParameterIDs, ParameterLayout (APVTS)
-source/presets/     PresetManager (factory + user presets)
-source/shapes/      ShapeManager (drawable LFO shapes, message thread)
-tests/              lflow_tests (Catch2)
-docs/               local copies (JUCE_VST3_UI_UX_BEST_PRACTICES.md, VST3_SOUNDMINER_SETUP.md)
-```
-
-## Host-compatibility docs
-
-Host-compatibility guidance (Soundminer setup, VST3/UI best practices) is
-canonically maintained at `../docs/` and shared across the ZQ SFX
-workspace — see `../docs/VST3_SOUNDMINER_SETUP.md`. Per the workspace's
-`../CLAUDE.md`, fix the canonical copy there rather than this project's
-local `docs/` copies.
-
-## Identity & contact
-
-`COMPANY_NAME "ZQ SFX"`, `BUNDLE_ID "com.zqsfx.lflow"`,
-`PLUGIN_MANUFACTURER_CODE ZQSF`, `PLUGIN_CODE Lflw` (frozen — never
-change; hosts key saved sessions on it).
-
-Website: https://www.zq-sfx.com
-Contact: connect@zq-sfx.com
-
 ## Licence
 
-Copyright (c) 2026 ZQ SFX.
+GPL-3.0-or-later. See LICENSE. Built with JUCE.
 
-Licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See
-[LICENSE](LICENSE). Built with [JUCE](https://juce.com), used under its AGPLv3 option, which
-GPL-3.0 is compatible with.
-
-## Version control
-
-**Diversion is the authoritative VCS** for this project (`.diversion/`
-present at the project root). A local `.git` repository also exists but
-has **no remote configured** — it is not the source of truth; do not treat
-it as a publishing target.
+ZQ SFX, https://www.zq-sfx.com, connect@zq-sfx.com.

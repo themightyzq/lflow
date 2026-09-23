@@ -13,6 +13,8 @@ There are no packaged releases yet; build from source (below). On macOS,
 the built plugin and standalone app are unsigned, so first launch needs
 right-click, Open.
 
+Requires macOS 11.0 or later.
+
 ## Use
 
 1. Pick a lane (1, 2, or 3) and choose its destination: Volume, Pan, one of

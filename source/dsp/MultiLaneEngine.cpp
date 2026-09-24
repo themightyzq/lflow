@@ -129,7 +129,7 @@ float MultiLaneEngine::getLaneValue (int lane) const noexcept
 }
 
 // smooth in [0,1] -> one-pole coefficient. 0 = instant; larger = rounder edges.
-// Identical math to Phase 1 ChopperEngine::onePole; smooth is a global control here.
+// Identical math to the Phase 1 single-lane engine's onePole; smooth is a global control here.
 float MultiLaneEngine::onePole (float target, float& state) const noexcept
 {
     if (globalParams.smooth <= 0.0f) { state = target; return target; }

@@ -62,7 +62,7 @@ const std::vector<FactoryPreset>& factoryPresets()
         { "Gentle Tremolo",
           { { "l1RateHz", 2.5f }, { "l1Depth", 0.35f }, { "smooth", 0.35f } }, {} },
 
-        { "Classic Chopper 1/8",
+        { "Classic Chop 1/8",
           { { "l1Waveform", 2.0f /* Square */ }, { "l1Sync", 1.0f }, { "l1Division", 3.0f /* 1/8 */ },
             { "l1Depth", 0.9f }, { "smooth", 0.10f } }, {} },
 

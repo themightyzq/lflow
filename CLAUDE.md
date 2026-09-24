@@ -80,7 +80,7 @@ Versioning: semver in CMake `project(... VERSION ...)`.
 This project uses **Diversion** (`dv` CLI at `~/.diversion/bin/dv`) as the authoritative VCS,
 per ../CLAUDE.md section 3. Do not run `git commit`/branch/PR flows for project work. Use
 Diversion's workflow (`dv status`, `dv commit`, etc.). A local `git` repository also exists
-(no remote configured, branch `phase1-chopper-clone`); it is not the
+(branch `main`, mirrored to GitHub since 2026-09-23); it is not the
 source of truth and is not a publishing target. Its `.diversion/` workspace marker was
 accidentally tracked by git and has since been untracked (`git rm --cached`) — never re-add it.
 

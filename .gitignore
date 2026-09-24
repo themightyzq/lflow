@@ -10,3 +10,9 @@ JUCE/
 
 # Diversion workspace marker (machine-specific, contains an absolute path)
 .diversion/
+
+# Internal review and planning artifacts stay in Diversion, not on the git mirror
+docs/superpowers/
+REVIEW-*.md
+.remember/
+.claude/

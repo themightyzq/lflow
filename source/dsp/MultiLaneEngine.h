@@ -16,7 +16,7 @@ struct GlobalParams
 // Orchestrates kNumLanes independent LFO lanes (each Volume- or Pan-assignable) and
 // applies their combined gain + dry/wet to a buffer. Pure C++, RT-safe: no allocation,
 // no locks. Operates in place on raw channel pointers. Replaces the Phase 1
-// single-lane ChopperEngine.
+// single-lane engine.
 class MultiLaneEngine
 {
 public:

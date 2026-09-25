@@ -1,4 +1,4 @@
-Universal ZQ SFX rules (identity, real-time safety, VCS policy, signing, shared agents, shared docs) live in ../CLAUDE.md and apply here. This file only adds what is specific to LFlOw.
+Universal ZQ SFX rules (identity, real-time safety, VCS policy, signing, shared agents, shared docs) are maintained internally by ZQ SFX and apply here. This file only adds what is specific to LFlOw.
 
 # LFlOw — Project Contract
 
@@ -38,9 +38,9 @@ thread) strictly separated.
 
 ## UI & build house standards (binding)
 Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.md` (both are
-now pointer stubs to the canonical copies in `../docs/`; fix the canonical copy, not the stub):
+pointer stubs to the canonical copies maintained internally by ZQ SFX; fix the canonical copy, not the stub):
 - LFlOw uses the ZQ SFX house UI (shared `zqsfx_ui` module, fetched by tag in CMakeLists.txt;
-  spec `../docs/ZQSFX_UI_STYLE_GUIDE.md`; migrated 2026-09-21, see `docs/ui_migration_report.md`).
+  spec maintained internally by ZQ SFX; migrated 2026-09-21).
   `LFlOwLookAndFeel` is a thin subclass of `zqsfx::ui::LookAndFeel`. All colors still come from
   `LFlOwLookAndFeel::Colors`, whose values mirror house tokens; never hardcode `juce::Colours::`
   in editor/gui code. Lanes 1/2/3 are the colour-blind-safe channels sky/yellow/purple, and lane
@@ -78,7 +78,7 @@ Versioning: semver in CMake `project(... VERSION ...)`.
 
 ## Version control: Diversion (NOT git)
 This project uses **Diversion** (`dv` CLI at `~/.diversion/bin/dv`) as the authoritative VCS,
-per ../CLAUDE.md section 3. Do not run `git commit`/branch/PR flows for project work. Use
+per ZQ SFX house VCS policy (maintained internally). Do not run `git commit`/branch/PR flows for project work. Use
 Diversion's workflow (`dv status`, `dv commit`, etc.). A local `git` repository also exists
 (branch `main`, mirrored to GitHub since 2026-09-23); it is not the
 source of truth and is not a publishing target. Its `.diversion/` workspace marker was

@@ -7,7 +7,7 @@
 //
 // The look-and-feel regression gate for the ZQ SFX house-UI migration (see
 // docs/ZQSFX_UI_STYLE_GUIDE.md and docs/ui_migration_report.md): render before a UI change,
-// render after, compare. Mirrors Project_TurboSynth's ts_ui_snapshot (src/cli/ui_snapshot.cpp),
+// render after, compare. Mirrors the equivalent UI snapshot tool from a sibling ZQ SFX project,
 // but links against LFlOw's own shared-code CMake target (the "pamplejuce pattern") instead of
 // recompiling the plugin sources a second time -- see CMakeLists.txt for the target wiring.
 //

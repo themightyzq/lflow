@@ -118,6 +118,15 @@ void LFlOwAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 {
     juce::ScopedNoDenormals noDenormals;
 
+    // A host that calls processBlock before prepareToPlay leaves dryScratch empty, so the
+    // chunk size below would be 0 and the loop would never advance (audio-thread hang).
+    // Output silence instead. No-op for any correctly prepared host.
+    if (dryScratch.getNumSamples() <= 0)
+    {
+        buffer.clear();
+        return;
+    }
+
     const bool bypassed = cachedParams.bypass->load() > 0.5f;
     bypassGain.setTargetValue (bypassed ? 0.0f : 1.0f);
 

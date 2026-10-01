@@ -2,7 +2,7 @@
 
 Earlier releases are listed at https://github.com/themightyzq/lflow/releases.
 
-## Unreleased
+## 0.8.0 - 2026-10-01
 
 ### Changed (audible)
 - Mix, each lane's Depth, each lane's Phase and both crossover frequencies (Xover Lo,

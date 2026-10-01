@@ -1239,7 +1239,7 @@ void LFlOwAudioProcessorEditor::paint (juce::Graphics& g)
     // Version footer (bottom-right).
     g.setColour (juce::Colour (C::outline));
     g.setFont (lookAndFeel.silkFont (9.0f));
-    g.drawText ("v0.7.0", getLocalBounds().removeFromBottom (18).removeFromRight (70),
+    g.drawText (juce::String ("v") + JucePlugin_VersionString, getLocalBounds().removeFromBottom (18).removeFromRight (70),
                 juce::Justification::centredRight, false);
 }
 

@@ -194,6 +194,10 @@ private:
     // Rename dialog, same non-modal pattern/lifetime as saveDialog above.
     std::unique_ptr<juce::AlertWindow> renameDialog;
 
+    // "Replace existing preset?" confirmation shown when Save As hits a name that is already
+    // taken (see saveUserPresetNamed()). Same non-modal pattern/lifetime as saveDialog.
+    std::unique_ptr<juce::AlertWindow> replaceDialog;
+
     // Throttle counter for refreshPresetBar(): the dirty check deep-compares the state tree
     // (see PresetManager::isDirty()), which is cheap but not 60-Hz-free-cheap, so the bar
     // refreshes every kPresetBarPollTicks timer ticks (~6 Hz) instead of every tick.
@@ -253,6 +257,13 @@ private:
     void refreshPresetBar();
     void showPresetMenu();
     void startSaveAsDialog();
+
+    // Saves the current state under `name` and reports the outcome. A name that already
+    // exists is never overwritten silently: the manager refuses (NameClash) and
+    // startReplaceDialog() asks Replace / Cancel; only Replace re-saves with
+    // OverwritePolicy::Replace.
+    void saveUserPresetNamed (const juce::String& name);
+    void startReplaceDialog (const juce::String& name);
 
     // Rename control plumbing (USER presets only). currentUserPresetFile() resolves the
     // currently-loaded preset name to its file under PresetManager::getUserPresetDir(), or an

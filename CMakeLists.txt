@@ -131,12 +131,28 @@ add_executable(lflow_tests
     tests/LR4CrossoverTests.cpp
     tests/ShapeModelTests.cpp
     tests/TripleBufferTests.cpp
-    tests/ModDelayTests.cpp)
+    tests/ModDelayTests.cpp
+    tests/ParamSmoothingTests.cpp)
 target_include_directories(lflow_tests PRIVATE source/dsp)
 find_package(Threads REQUIRED)
 target_link_libraries(lflow_tests PRIVATE lflow_dsp Catch2::Catch2WithMain Threads::Threads)
 target_compile_features(lflow_tests PRIVATE cxx_std_17)
 
+# User-preset folder, name-clash and migration tests: juce_core only, temp directories only
+# (never the real per-user folders). A separate target because lflow_tests stays JUCE-free.
+juce_add_console_app(lflow_preset_tests PRODUCT_NAME "lflow_preset_tests")
+target_sources(lflow_preset_tests PRIVATE tests/PresetFolderTests.cpp)
+target_include_directories(lflow_preset_tests PRIVATE source/presets)
+target_compile_definitions(lflow_preset_tests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+target_link_libraries(lflow_preset_tests PRIVATE
+    Catch2::Catch2WithMain
+    juce::juce_core
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
 include(CTest)
 include(Catch)
 catch_discover_tests(lflow_tests)
+catch_discover_tests(lflow_preset_tests)

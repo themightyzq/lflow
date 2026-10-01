@@ -11,16 +11,29 @@ void MultiLaneEngine::prepare (double sr, int /*maxBlock*/) noexcept
     for (auto& lane : lanes)
         lane.clock.prepare (sampleRate);
 
+    // Parameter-smoothing ramp length at this sample rate (see kSmoothingSeconds).
+    const int rampSamples = static_cast<int> (std::lround (kSmoothingSeconds * sampleRate));
+    for (auto& lane : lanes)
+    {
+        lane.depthSm.setRampSamples (rampSamples);
+        lane.phaseSm.setRampSamples (rampSamples);
+    }
+    mixSm.setRampSamples (rampSamples);
+    xoverLowSm.setRampSamples (rampSamples);
+    xoverHighSm.setRampSamples (rampSamples);
+
     // LR4Crossover::prepare() resets to its own internal default frequency, so
-    // (re)apply our current xoverLow/HighHz unconditionally here -- independent of
-    // setCrossovers()'s change-compare, which only guards against redundant
+    // (re)apply the current crossover targets unconditionally here -- independent of
+    // retuneCrossovers()'s change-compare, which only guards against redundant
     // recomputation for identical Hz values already applied.
+    appliedLowHz  = xoverLowHz;
+    appliedHighHz = xoverHighHz;
     for (int c = 0; c < kNumBandChannels; ++c)
     {
         lowSplit[c].prepare (sampleRate);
         highSplit[c].prepare (sampleRate);
-        lowSplit[c].setFrequency (xoverLowHz);
-        highSplit[c].setFrequency (xoverHighHz);
+        lowSplit[c].setFrequency (appliedLowHz);
+        highSplit[c].setFrequency (appliedHighHz);
     }
 
     // ModDelay::prepare() ALLOCATES (see ModDelay.h's allocation notice) -- called only
@@ -66,29 +79,89 @@ void MultiLaneEngine::reset() noexcept
     }
     bandWasActive = false;
     pitchWasActive = false;
+    snapSmoothersPending = true;
 }
 
 void MultiLaneEngine::setCrossovers (double lowHz, double highHz) noexcept
 {
-    const double newLow  = lowHz;
-    const double newHigh = (highHz > lowHz * 1.25) ? highHz : lowHz * 1.25;
+    // Targets only: process() ramps the values the filters actually use toward these (see
+    // kSmoothingSeconds). getEffectiveHighHz() reports the clamped TARGET.
+    xoverLowHz            = lowHz;
+    xoverHighRequestedHz  = highHz;
+    xoverHighHz           = (highHz > lowHz * 1.25) ? highHz : lowHz * 1.25;
+}
 
-    const bool lowChanged  = (newLow  != xoverLowHz);
-    const bool highChanged = (newHigh != xoverHighHz);
+void MultiLaneEngine::retuneCrossovers (double lowHz, double highHz) noexcept
+{
+    // Same effectiveHigh = max(high, low*1.25) rule as the target side, applied to the
+    // ramped values so the bands can't invert mid-ramp either. Compare-before-set: the
+    // coefficient math only runs for a split whose frequency actually moved (arithmetic
+    // only, no allocation).
+    const double effHigh = (highHz > lowHz * 1.25) ? highHz : lowHz * 1.25;
 
-    if (! lowChanged && ! highChanged)
-        return; // cheap compare-before-set: no coefficient recompute needed
-
-    xoverLowHz  = newLow;
-    xoverHighHz = newHigh;
-
-    if (lowChanged)
+    if (lowHz != appliedLowHz)
+    {
+        appliedLowHz = lowHz;
         for (int c = 0; c < kNumBandChannels; ++c)
-            lowSplit[c].setFrequency (xoverLowHz);
+            lowSplit[c].setFrequency (appliedLowHz);
+    }
 
-    if (highChanged)
+    if (effHigh != appliedHighHz)
+    {
+        appliedHighHz = effHigh;
         for (int c = 0; c < kNumBandChannels; ++c)
-            highSplit[c].setFrequency (xoverHighHz);
+            highSplit[c].setFrequency (appliedHighHz);
+    }
+}
+
+void MultiLaneEngine::syncSmootherTargets() noexcept
+{
+    const bool snap = snapSmoothersPending;
+    snapSmoothersPending = false;
+
+    for (auto& lane : lanes)
+    {
+        const double depth = static_cast<double> (lane.params.depth);
+        const double phase = static_cast<double> (lane.params.phaseOffset);
+
+        if (snap)
+        {
+            lane.depthSm.snapTo (depth);
+            lane.phaseSm.snapTo (phase);
+            lane.phaseTargetRaw = phase;
+            continue;
+        }
+
+        lane.depthSm.setTarget (depth);
+
+        // Phase is circular: move by the shortest signed delta (in turns) from the last
+        // requested offset, so 350 -> 10 degrees is a +20 degree glide, not a -340 one.
+        double delta = phase - lane.phaseTargetRaw;
+        delta -= std::floor (delta + 0.5);
+        lane.phaseTargetRaw = phase;
+        if (delta != 0.0)
+            lane.phaseSm.setTarget (lane.phaseSm.getTarget() + delta);
+        else if (! lane.phaseSm.isSmoothing())
+        {
+            // Keep the unwrapped value bounded after many wrap-arounds.
+            const double c = lane.phaseSm.getCurrent();
+            if (c < -1.0 || c > 2.0)
+                lane.phaseSm.snapTo (c - std::floor (c));
+        }
+    }
+
+    if (snap)
+    {
+        mixSm.snapTo (static_cast<double> (globalParams.mix));
+        xoverLowSm.snapTo (xoverLowHz);
+        xoverHighSm.snapTo (xoverHighRequestedHz);
+    }
+    else
+    {
+        mixSm.setTarget (static_cast<double> (globalParams.mix));
+        xoverLowSm.setTarget (xoverLowHz);
+        xoverHighSm.setTarget (xoverHighRequestedHz);
+    }
 }
 
 void MultiLaneEngine::setTransport (bool playing, double bpm, double ppq) noexcept
@@ -152,6 +225,13 @@ float MultiLaneEngine::onePole (float target, float& state) const noexcept
 
 void MultiLaneEngine::process (float* const* channels, int numChannels, int numSamples) noexcept
 {
+    // Parameter smoothing: pick up the targets set since the last call (snap on the first
+    // call after prepare()/reset()).
+    syncSmootherTargets();
+
+    // "active" at BLOCK level: the lane has a non-zero depth target, or its depth is still
+    // ramping down toward zero. Such a lane is fully evaluated for the whole block; whether a
+    // given SAMPLE of it contributes is decided per sample from the ramped depth (below).
     bool   active[kNumLanes];
     bool   doPan[kNumLanes];
     double rates[kNumLanes];
@@ -159,24 +239,11 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
     bool   bandActive = false;
     bool   pitchActive = false;
 
-    // L1 hardening (spec A): true for a lane whose depth went 0 -> >0 as of
-    // THIS call, relative to its state at the end of the previous call. Used
-    // below to snap that lane's smoothL/R straight to the target on the first
-    // evaluated sample instead of gliding from a stale, time-elapsed value.
-    // Computed/updated unconditionally (even for lanes that stay inactive, and
-    // even on the all-lanes-inactive early-return path below) so a lane that
-    // sits out an entire block-gap is still tracked correctly for the NEXT
-    // reactivation.
-    bool activationEdge[kNumLanes];
-
     for (int i = 0; i < kNumLanes; ++i)
     {
         Lane& lane = lanes[i];
-        active[i] = lane.params.depth > 0.0f;
+        active[i] = lane.depthSm.getTarget() > 0.0 || lane.depthSm.getCurrent() > 0.0;
         doPan[i]  = false;
-
-        activationEdge[i] = active[i] && ! lane.wasActive;
-        lane.wasActive = active[i];
 
         // Link lockstep fix (folded from Phase 2 final review): every lane's clock
         // rate and sync-phase-reset are computed/applied regardless of depth, so a
@@ -243,14 +310,42 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
         for (int n = 0; n < numSamples; ++n)
             for (int i = 0; i < kNumLanes; ++i)
                 lanes[i].clock.advance (rates[i]);
+
+        // Nothing audible is happening, so settle every smoother on its target now (a lane
+        // that later comes alive ramps its depth in; it must not also replay a stale mix /
+        // phase / crossover ramp). Every lane is off, so none counts as "was active".
+        for (auto& lane : lanes)
+        {
+            lane.phaseSm.snapTo (lane.phaseSm.getTarget());
+            lane.wasActive = false;
+        }
+        mixSm.snapTo (mixSm.getTarget());
+        xoverLowSm.snapTo (xoverLowSm.getTarget());
+        xoverHighSm.snapTo (xoverHighSm.getTarget());
         return;
     }
 
-    const float mix = globalParams.mix;
     const int chLimit = (numChannels < kNumBandChannels) ? numChannels : kNumBandChannels;
+
+    // Crossover filters follow the ramped frequencies. Retune once at block start (covers
+    // the snap and a band lane engaging), then every kXoverUpdateInterval samples while a
+    // ramp is running, and once more at the end of the block so it lands exactly.
+    if (bandActive)
+        retuneCrossovers (xoverLowSm.getCurrent(), xoverHighSm.getCurrent());
+    const bool xoverRamping = xoverLowSm.isSmoothing() || xoverHighSm.isSmoothing();
 
     for (int n = 0; n < numSamples; ++n)
     {
+        const float mix = static_cast<float> (mixSm.next());
+
+        if (xoverRamping)
+        {
+            const double lowHz  = xoverLowSm.next();
+            const double highHz = xoverHighSm.next();
+            if (bandActive && (n % kXoverUpdateInterval) == kXoverUpdateInterval - 1)
+                retuneCrossovers (lowHz, highHz);
+        }
+
         // Input scrub (Phase 7 Task 1 / QA C1 hardening): non-finite host input
         // must never reach a state-holding unit (band-split biquads, the pitch
         // ModDelay's ring, or the onePole smoothers via the band/pitch gain
@@ -272,19 +367,29 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
 
         for (int i = 0; i < kNumLanes; ++i)
         {
-            if (! active[i]) continue;
             Lane& lane = lanes[i];
 
-            float ph = static_cast<float> (lane.clock.getPhase()) + lane.params.phaseOffset;
+            // Ramped phase offset and depth advance every sample, whether or not the lane
+            // contributes, so they stay on their ramps.
+            const float phaseOffset = static_cast<float> (lane.phaseSm.next());
+            const double depthNow = lane.depthSm.next();
+
+            if (! (depthNow > 0.0))
+            {
+                lane.wasActive = false;   // off: the next sample it runs is an activation edge
+                continue;
+            }
+
+            float ph = static_cast<float> (lane.clock.getPhase()) + phaseOffset;
             ph -= std::floor (ph);
 
-            // L1 hardening: on this lane's inactive->active edge, the FIRST
-            // evaluated sample of the block (n==0 -- active[] is fixed for the
-            // whole call) snaps smoothL/R straight to the target instead of
-            // gliding from a stale, possibly long-frozen state (the clock keeps
-            // advancing while a lane sits at depth 0, per the lockstep fix
-            // above, so that stale state no longer corresponds to "now").
-            const bool snap = (n == 0) && activationEdge[i];
+            // L1 hardening: on this lane's inactive->active edge (depth ramped up from
+            // exactly 0), the FIRST evaluated sample snaps smoothL/R straight to the target
+            // instead of gliding from a stale, possibly long-frozen state (the clock keeps
+            // advancing while a lane sits at depth 0, per the lockstep fix above, so that
+            // stale state no longer corresponds to "now").
+            const bool snap = ! lane.wasActive;
+            lane.wasActive = true;
 
             const float rawL = lane.lfo.valueAt (ph);
             float modL;
@@ -298,7 +403,7 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
                 modL = onePole (rawL, lane.smoothL);
             }
 
-            const float depth = lane.params.depth;
+            const float depth = static_cast<float> (depthNow);
             const float gL = 1.0f - depth * modL;
 
             switch (lane.params.dest)
@@ -405,6 +510,10 @@ void MultiLaneEngine::process (float* const* channels, int numChannels, int numS
         for (int i = 0; i < kNumLanes; ++i)
             lanes[i].clock.advance (rates[i]);
     }
+
+    // Land the crossover filters exactly on the ramp's final value for this block.
+    if (bandActive)
+        retuneCrossovers (xoverLowSm.getCurrent(), xoverHighSm.getCurrent());
 
     // End-of-block state health sweep (Phase 7 Task 1 / QA C1+H1 hardening,
     // spec A "guard the state"). Belt-and-suspenders on top of the per-sample

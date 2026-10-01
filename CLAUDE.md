@@ -33,8 +33,16 @@ thread) strictly separated.
   for reuse by later phases (multi-lane, multiband).
 - Parameters live in APVTS; UI binds via attachments. No parameter state outside APVTS.
 - Shape nodes live in the SHAPES child of apvts.state (ShapeManager, message thread only);
-  audio thread gets baked tables via lock-free TripleBuffer. User presets: XML at
-  ~/Library/Audio/Presets/ZQ SFX/LFlOw/*.lflowpreset.
+  audio thread gets baked tables via lock-free TripleBuffer. User presets: XML
+  `*.lflowpreset`, in `~/Library/Audio/Presets/ZQ SFX/LFlOw` on macOS, `%APPDATA%\ZQ SFX\LFlOw`
+  on Windows, `~/.config/ZQ SFX/LFlOw` on Linux (`source/presets/PresetFolder.h`; Windows/Linux
+  copy-not-move migrate from the old home-relative `Library/...` path, marker file, tested in
+  `lflow_preset_tests`). Save As never overwrites silently (`PresetManager::saveUserPreset`
+  refuses on a name clash unless `OverwritePolicy::Replace`).
+- Smoothing lives in `MultiLaneEngine` (pure C++ `ParamSmoother`, 30 ms linear ramp) for mix,
+  depth, phase offset and both crossovers; rate and Smooth are deliberately unsmoothed. New
+  continuous parameters that reach the audio need the same treatment plus a step test in
+  `tests/ParamSmoothingTests.cpp`.
 
 ## UI & build house standards (binding)
 Follow `docs/JUCE_VST3_UI_UX_BEST_PRACTICES.md` and `docs/VST3_SOUNDMINER_SETUP.md` (both are
@@ -63,7 +71,7 @@ pointer stubs to the canonical copies maintained internally by ZQ SFX; fix the c
 - Configure: `cmake -B build -DCMAKE_BUILD_TYPE=Debug`
 - Build plugin (standalone for testing): `cmake --build build --target LFlOw_Standalone -j`
 - Build all formats: `cmake --build build --target LFlOw_All -j`
-- Build + run tests: `cmake --build build --target lflow_tests -j && ./build/lflow_tests`
+- Build + run tests: `cmake --build build --target lflow_tests lflow_preset_tests -j && (cd build && ctest)`
 - JUCE is pinned to tag `8.0.14` in CMakeLists.txt; bump deliberately.
 
 ## Definition of done (a change is done when)

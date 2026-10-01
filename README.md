@@ -33,11 +33,19 @@ Requires macOS 11.0 or later.
 ### Presets
 
 Factory presets are ready to load, and you can save your own alongside
-them. User presets are XML files written to:
+them. Save As asks before it replaces a preset that already exists. User
+presets are XML files (.lflowpreset) written to:
 
 ```
-~/Library/Audio/Presets/ZQ SFX/LFlOw/
+macOS:    ~/Library/Audio/Presets/ZQ SFX/LFlOw/
+Windows:  %APPDATA%\ZQ SFX\LFlOw\
+Linux:    ~/.config/ZQ SFX/LFlOw/
 ```
+
+Earlier Windows and Linux builds kept presets under
+`~/Library/Audio/Presets/ZQ SFX/LFlOw/` in the home folder. Those presets are
+copied to the folder above the first time the plugin loads; the old folder is
+left as it is.
 
 ## Build from source
 
@@ -54,7 +62,8 @@ cmake --build build --target LFlOw_All -j          # all configured formats
 Run the unit tests with:
 
 ```bash
-cmake --build build --target lflow_tests -j && ./build/lflow_tests
+cmake --build build --target lflow_tests lflow_preset_tests -j
+(cd build && ctest)
 ```
 
 ## Licence

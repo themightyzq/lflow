@@ -44,7 +44,11 @@ public:
             case Waveform::SawUp:    return phase;
             case Waveform::SawDown:  return 1.0f - phase;
             case Waveform::SampleHold:
-                if (phase < lastPhase) currentStep = nextRandom(); // wrap detected
+                // Wrap detected: the phase fell by most of a cycle. A plain `phase < lastPhase`
+                // also fires on any small BACKWARD move (a phase offset being glided downward,
+                // see MultiLaneEngine's parameter smoothing), which would re-roll the step on
+                // every sample of that glide.
+                if (lastPhase - phase > 0.5f) currentStep = nextRandom();
                 lastPhase = phase;
                 return currentStep;
             case Waveform::Custom:

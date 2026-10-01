@@ -4,6 +4,7 @@
 #include "LfoClock.h"
 #include "LR4Crossover.h"
 #include "ModDelay.h"
+#include "ParamSmoother.h"
 
 namespace lflow {
 
@@ -34,6 +35,18 @@ public:
     void setTransport (bool playing, double bpm, double ppqPosition) noexcept;
     void setLaneParams (int lane, const LaneParams& p) noexcept;
     void setGlobalParams (const GlobalParams& g) noexcept;
+
+    // Parameter smoothing. Depth, phase offset, Mix and both crossover frequencies are
+    // continuous parameters whose value reaches the audio directly (a gain, an LFO read
+    // position, a wet/dry blend, a filter coefficient), so a host automation step or a knob
+    // jump used to land as a one-sample discontinuity (zipper noise). The setters above only
+    // record TARGETS; process() ramps the values it actually uses toward them linearly over
+    // kSmoothingSeconds, sample by sample. The plugin parameters themselves are never touched.
+    // After prepare()/reset() the first process() snaps straight to the targets, so a loaded
+    // session or a fresh prepare does not glide in from defaults.
+    // Rate and the Smooth amount are deliberately NOT smoothed: changing either alters how
+    // fast / how round the modulator moves, not the output sample, so neither can click.
+    static constexpr double kSmoothingSeconds = 0.030;
 
     // Band-split crossover points for the Low/Mid/High lane destinations. Defaults
     // 250/2500 Hz. Enforces effectiveHigh = max(highHz, lowHz*1.25) so the bands can't
@@ -70,15 +83,26 @@ private:
         float lastPhase { 0.0f }; // last evaluated phase incl. offset, for the UI
         float lastValue { 0.0f }; // last smoothed L-mod value, for the UI
 
-        // Whether this lane was active (depth>0) as of the end of the previous
-        // process() call. Used to detect the inactive->active edge for the L1
-        // smoother-snap hardening fix (see process()): reactivating a lane
-        // snaps smoothL/R straight to the first target instead of gliding from
-        // a stale, time-elapsed value.
+        // Whether this lane was evaluated (smoothed depth > 0) on the previous SAMPLE.
+        // Used to detect the inactive->active edge for the L1 smoother-snap hardening
+        // fix (see process()): reactivating a lane snaps smoothL/R straight to the
+        // first target instead of gliding from a stale, time-elapsed value.
         bool wasActive { false };
+
+        // Ramped copies of params.depth and params.phaseOffset (see kSmoothingSeconds).
+        // phaseSm runs in an UNWRAPPED turn domain so a phase change takes the short way
+        // round the circle (350 -> 10 degrees moves +20, not -340); phaseTargetRaw is the
+        // last raw offset seen, used to work out that short delta.
+        ParamSmoother depthSm;
+        ParamSmoother phaseSm;
+        double phaseTargetRaw { 0.0 };
     };
 
     float onePole (float target, float& state) const noexcept;
+
+    // Copies the targets held in params/globalParams/xover* into the smoothers (start of
+    // every process() call). Snaps instead of ramping when snapSmoothersPending is set.
+    void syncSmootherTargets() noexcept;
 
     Lane lanes[kNumLanes];
     GlobalParams globalParams;
@@ -94,9 +118,24 @@ private:
     static constexpr int kNumBandChannels = 2;
     LR4Crossover lowSplit[kNumBandChannels];  // split @ xoverLowHz: (low, rest)
     LR4Crossover highSplit[kNumBandChannels]; // split @ xoverHighHz on `rest`: (mid, high)
-    double xoverLowHz  { 250.0 };
-    double xoverHighHz { 2500.0 }; // already clamped (effective) value
+    double xoverLowHz  { 250.0 };   // target: last value passed to setCrossovers()
+    double xoverHighHz { 2500.0 };  // target, already clamped (effective) against xoverLowHz
+    double xoverHighRequestedHz { 2500.0 }; // target as requested (unclamped), feeds xoverHighSm
     bool   bandWasActive { false };
+
+    // Ramped crossover frequencies and what the biquads were last built for. The filters are
+    // re-tuned from the ramped values every kXoverUpdateInterval samples while a ramp runs
+    // (coefficient math is far too heavy to redo per sample), and once per block otherwise.
+    ParamSmoother xoverLowSm, xoverHighSm;
+    double appliedLowHz  { 250.0 };
+    double appliedHighHz { 2500.0 };
+    static constexpr int kXoverUpdateInterval = 16;
+    void retuneCrossovers (double lowHz, double highHz) noexcept;
+
+    ParamSmoother mixSm;
+
+    // Set by prepare()/reset(); the next process() snaps every smoother to its target.
+    bool snapSmoothersPending { true };
 
     // Pitch destination (Phase 5): per-channel modulated delay for LFO vibrato. Runs
     // strictly AFTER the band split/sum above and BEFORE the Volume/Pan lane gains

@@ -473,7 +473,79 @@ void LFlOwAudioProcessorEditor::startSaveAsDialog()
             {
                 const auto name = dialog->getTextEditorContents ("name").trim();
                 if (name.isNotEmpty())
-                    safeThis->processorRef.getPresetManager().saveUserPreset (name);
+                    safeThis->saveUserPresetNamed (name);   // refreshes the bar itself
+                else
+                    safeThis->refreshPresetBar();
+            }
+            else
+                safeThis->refreshPresetBar();
+        }),
+        false); // deleteWhenDismissed=false: the member unique_ptr owns the window
+}
+
+void LFlOwAudioProcessorEditor::saveUserPresetNamed (const juce::String& name)
+{
+    using SaveOutcome = lflow::PresetManager::SaveOutcome;
+
+    // Default policy refuses to overwrite: a taken name comes back as NameClash and nothing
+    // on disk has changed.
+    switch (processorRef.getPresetManager().saveUserPreset (name))
+    {
+        case SaveOutcome::Saved:
+        case SaveOutcome::EmptyName:
+            break;
+
+        case SaveOutcome::NameClash:
+            startReplaceDialog (name);
+            break;
+
+        case SaveOutcome::WriteError:
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                     "Save failed",
+                                                     "The preset file couldn't be written. "
+                                                     "Check that the presets folder is writable.");
+            break;
+    }
+
+    refreshPresetBar();
+}
+
+void LFlOwAudioProcessorEditor::startReplaceDialog (const juce::String& name)
+{
+    // Non-modal, same pattern/lifetime as startSaveAsDialog(). Cancel is the Return/Escape
+    // default: overwriting needs a deliberate click on Replace.
+    replaceDialog = std::make_unique<juce::AlertWindow> (
+        "Replace preset?",
+        "A preset named \"" + name + "\" already exists. Replace it with the current settings?",
+        juce::MessageBoxIconType::WarningIcon, this);
+    replaceDialog->setLookAndFeel (&lookAndFeel);
+    replaceDialog->addButton ("Replace", 1);
+    replaceDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::returnKey),
+                              juce::KeyPress (juce::KeyPress::escapeKey));
+
+    juce::Component::SafePointer<LFlOwAudioProcessorEditor> safeThis (this);
+    replaceDialog->enterModalState (true,
+        juce::ModalCallbackFunction::create ([safeThis, name] (int result)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto dialog = std::move (safeThis->replaceDialog);
+            if (dialog == nullptr)
+                return;
+            dialog->setLookAndFeel (nullptr);
+            dialog->setVisible (false);
+
+            if (result == 1)
+            {
+                using SaveOutcome = lflow::PresetManager::SaveOutcome;
+                const auto outcome = safeThis->processorRef.getPresetManager().saveUserPreset (
+                    name, lflow::PresetManager::OverwritePolicy::Replace);
+                if (outcome == SaveOutcome::WriteError)
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                             "Save failed",
+                                                             "The preset file couldn't be written. "
+                                                             "Check that the presets folder is writable.");
             }
             safeThis->refreshPresetBar();
         }),

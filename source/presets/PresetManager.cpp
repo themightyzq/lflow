@@ -183,6 +183,11 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& apvtsIn,
 {
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
 
+    // One-time copy of presets saved by builds that used the old per-OS-agnostic location.
+    // A no-op on macOS (same folder), on a fresh install (no old folder) and after the first
+    // run (marker file); it never moves, deletes or overwrites anything.
+    presetfolder::migrateLegacyUserPresets (legacyUserPresetDir(), userPresetDirNoCreate());
+
     // Both A/B slots start as the construction-time state (the ParameterLayout defaults, in
     // the normal case -- a host session restore arrives later via setStateInformation and is
     // deliberately NOT folded back into the slots: A/B is a live comparison tool, not a
@@ -224,10 +229,25 @@ void PresetManager::loadFactory (int index)
                     "Load preset " + juce::String (preset.name));
 }
 
+namespace {
+juce::File userHome() { return juce::File::getSpecialLocation (juce::File::userHomeDirectory); }
+} // namespace
+
+juce::File PresetManager::userPresetDirNoCreate()
+{
+    return presetfolder::userPresetDir (
+        presetfolder::currentPlatform(), userHome(),
+        juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory));
+}
+
+juce::File PresetManager::legacyUserPresetDir()
+{
+    return presetfolder::legacyUserPresetDir (userHome());
+}
+
 juce::File PresetManager::getUserPresetDir()
 {
-    auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-                   .getChildFile ("Library/Audio/Presets/ZQ SFX/LFlOw");
+    auto dir = userPresetDirNoCreate();
     if (! dir.isDirectory())
         dir.createDirectory(); // on-demand; failure surfaces as an empty list / failed save
     return dir;
@@ -235,33 +255,44 @@ juce::File PresetManager::getUserPresetDir()
 
 juce::Array<juce::File> PresetManager::getUserPresetFiles()
 {
-    auto files = getUserPresetDir().findChildFiles (juce::File::findFiles, false, "*.lflowpreset");
+    auto files = getUserPresetDir().findChildFiles (juce::File::findFiles, false,
+                                                    juce::String ("*") + presetfolder::kExtension);
     files.sort();
     return files;
 }
 
-bool PresetManager::saveUserPreset (const juce::String& name)
+PresetManager::SaveOutcome PresetManager::saveUserPreset (const juce::String& name,
+                                                          OverwritePolicy policy)
 {
     jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
 
     const auto legal = juce::File::createLegalFileName (name.trim());
     if (legal.isEmpty())
-        return false;
+        return SaveOutcome::EmptyName;
+
+    // Data safety: never overwrite an existing preset unless the caller said so. Checked
+    // before anything is captured or written.
+    const auto dir = getUserPresetDir();
+    const auto clash = presetfolder::findClashingPreset (dir, legal);
+    if (clash != juce::File() && policy == OverwritePolicy::Refuse)
+        return SaveOutcome::NameClash;
 
     auto xml = captureState().createXml();
     if (xml == nullptr)
-        return false;
+        return SaveOutcome::WriteError;
 
-    const auto file = getUserPresetDir().getChildFile (legal + ".lflowpreset");
+    // Replace targets the file that already exists, under its own name (see the header).
+    const auto file = clash != juce::File() ? clash
+                                            : dir.getChildFile (legal + presetfolder::kExtension);
     if (! xml->writeTo (file))
-        return false;
+        return SaveOutcome::WriteError;
 
     // Saving adopts the preset identity: name shown un-starred, and the just-saved state
     // becomes the dirty baseline (it IS the file's content, by construction).
-    currentName = legal;
+    currentName = file.getFileNameWithoutExtension();
     loadedSnapshot = captureState();
     slotNames[activeSlot] = currentName;
-    return true;
+    return SaveOutcome::Saved;
 }
 
 bool PresetManager::loadUserPresetFile (const juce::File& file)
@@ -303,12 +334,12 @@ PresetManager::RenameOutcome PresetManager::renameUserPreset (const juce::File& 
     if (legal.isEmpty() || legal != newName)
         return RenameOutcome::InvalidName;
 
-    for (auto& existing : getUserPresetFiles())
-        if (existing != file && existing.getFileNameWithoutExtension().equalsIgnoreCase (legal))
-            return RenameOutcome::NameClash;
+    if (presetfolder::findClashingPreset (getUserPresetDir(), legal,
+                                          juce::File::areFileNamesCaseSensitive(), file) != juce::File())
+        return RenameOutcome::NameClash;
 
     const auto oldName = file.getFileNameWithoutExtension();
-    const auto newFile = file.getSiblingFile (legal + ".lflowpreset");
+    const auto newFile = file.getSiblingFile (legal + presetfolder::kExtension);
 
     // File::moveFileTo() already does the right thing for a pure case change on a case-
     // insensitive filesystem (skips the usual "delete the destination first" step when source

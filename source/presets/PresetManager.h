@@ -1,11 +1,12 @@
 #pragma once
 #include <JuceHeader.h>
 #include "../shapes/ShapeManager.h"
+#include "PresetFolder.h"
 #include <vector>
 
 // Phase 7 Task 4 (UX #2): in-plugin preset system -- 10 code-defined factory presets, user
-// presets on disk (~/Library/Audio/Presets/ZQ SFX/LFlOw/*.lflowpreset = plain state XML), and
-// two in-memory A/B compare slots. Owned by the processor (so A/B slots and the current preset
+// presets on disk (<user preset folder>/*.lflowpreset = plain state XML; the folder is
+// OS-specific, see PresetFolder.h and getUserPresetDir()), and two in-memory A/B compare slots. Owned by the processor (so A/B slots and the current preset
 // name survive the editor being closed/reopened), driven entirely by the editor's preset bar.
 //
 // THREADING: message thread only, like ShapeManager -- every public member function here is
@@ -50,10 +51,34 @@ public:
 
     // ---- User presets: state XML files named <name>.lflowpreset in getUserPresetDir().
     // The directory is created on demand (message-thread file I/O, per the Phase 7 design).
+    //
+    // Location: macOS ~/Library/Audio/Presets/ZQ SFX/LFlOw; Windows %APPDATA%\ZQ SFX\LFlOw;
+    // Linux ~/.config/ZQ SFX/LFlOw. Builds before this layout kept presets under
+    // ~/Library/Audio/Presets/ZQ SFX/LFlOw on every OS; the constructor copies (never moves)
+    // anything found there into the new folder once on Windows/Linux -- see PresetFolder.h.
     static juce::File getUserPresetDir();
     static juce::Array<juce::File> getUserPresetFiles(); // sorted by filename, may be empty
-    bool saveUserPreset (const juce::String& name);      // false on write failure
     bool loadUserPresetFile (const juce::File& file);    // false on parse failure
+
+    // What saveUserPreset() does when a preset with that name already exists. Refuse is the
+    // default everywhere, so no caller can overwrite a user's file without asking for it.
+    enum class OverwritePolicy { Refuse, Replace };
+
+    enum class SaveOutcome
+    {
+        Saved,
+        EmptyName,   // blank/whitespace-only name, or nothing left after stripping illegal characters
+        NameClash,   // a preset with this name exists and the policy is Refuse; nothing was written
+        WriteError   // the state could not be serialised or the file could not be written
+    };
+
+    // Saves the current live state as <name>.lflowpreset. With OverwritePolicy::Refuse an
+    // existing preset of that name is left untouched and NameClash is returned. With Replace
+    // the existing file is overwritten under ITS OWN name (so a save typed "foo" over "Foo" does
+    // not leave a differently-cased twin) through XmlElement::writeTo(File), which writes a
+    // temporary file and swaps it in, so a failed write never destroys the old preset.
+    SaveOutcome saveUserPreset (const juce::String& name,
+                                OverwritePolicy policy = OverwritePolicy::Refuse);
 
     // Result of renameUserPreset(), surfaced to the editor so its AlertWindow can show a
     // specific reason instead of a generic failure.
@@ -62,7 +87,7 @@ public:
         Success,
         EmptyName,     // blank/whitespace-only new name
         InvalidName,   // contains a path separator, or an illegal-for-filenames character
-        NameClash,     // another *existing* user preset already has this name (case-insensitive)
+        NameClash,     // another *existing* user preset already has this name (case-insensitive on case-insensitive filesystems)
         FileError      // the on-disk rename itself failed (permissions, file went missing, ...)
     };
 
@@ -104,6 +129,11 @@ public:
     juce::ValueTree captureState();
 
 private:
+    // The two folders without creating either (the migration needs to see the legacy one as
+    // absent on a fresh install).
+    static juce::File userPresetDirNoCreate();
+    static juce::File legacyUserPresetDir();
+
     // Applies `tree` (a PARAMS-rooted state snapshot; missing params fall back to their
     // defaults, missing/invalid SHAPES lanes fall back to the default triangle) as ONE undo
     // transaction named `transactionName`, then re-snapshots the dirty baseline and adopts

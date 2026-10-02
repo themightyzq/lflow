@@ -2,7 +2,7 @@
 
 Earlier releases are listed at https://github.com/themightyzq/lflow/releases.
 
-## Unreleased
+## 0.9.0 - 2026-10-02
 
 ### Changed
 - Every knob and slider (each lane's Rate, Phase and Depth; Mix, Smooth, Xover Lo, Xover Hi)

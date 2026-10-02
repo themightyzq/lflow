@@ -10,7 +10,7 @@ on macOS, and VST3 on Windows and Linux.
 ## Install
 
 Binary releases are available for download from the
-[v0.8.0 release](https://github.com/themightyzq/lflow/releases/tag/v0.8.0)
+[v0.9.0 release](https://github.com/themightyzq/lflow/releases/tag/v0.9.0)
 (LFlOw-macOS-VST3.zip, LFlOw-macOS-AU-Standalone.zip, LFlOw-Windows-VST3.zip,
 LFlOw-Linux-VST3.zip). On macOS, the built plugin and standalone app are
 unsigned, so first launch needs right-click, Open.

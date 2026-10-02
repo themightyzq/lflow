@@ -97,12 +97,15 @@ private:
 
         juce::ComboBox waveformBox;
         juce::ToggleButton syncButton { "Sync" };
-        juce::Slider rateSlider;
+        // Every parameter slider is a zqsfx::ui::Dial: keyboard focus, focus ring, Shift+arrow
+        // fine step. Double-click returns to the parameter default (setDoubleClickDefault, set
+        // after the attachments exist -- see buildLaneStrip).
+        zqsfx::ui::Dial rateSlider;
         juce::ComboBox divisionBox;
         juce::ComboBox rhythmBox;
-        juce::Slider phaseSlider;
+        zqsfx::ui::Dial phaseSlider;
         juce::ComboBox destBox;
-        juce::Slider depthSlider;
+        zqsfx::ui::Dial depthSlider;
 
         std::unique_ptr<APVTS::ComboBoxAttachment> waveformAtt, divisionAtt, rhythmAtt, destAtt;
         std::unique_ptr<APVTS::ButtonAttachment>   syncAtt;
@@ -154,7 +157,7 @@ private:
     LaneStrip laneStrips[3];
 
     juce::ToggleButton linkButton { "Link" };
-    juce::Slider mixSlider, smoothSlider, xoverLowSlider, xoverHighSlider;
+    zqsfx::ui::Dial mixSlider, smoothSlider, xoverLowSlider, xoverHighSlider;
     juce::Label mixLabel { {}, "Mix" }, smoothLabel { {}, "Smooth" };
     juce::Label xoverLowLabel { {}, "Xover Lo" }, xoverHighLabel { {}, "Xover Hi" };
     std::unique_ptr<APVTS::ButtonAttachment> linkAtt;

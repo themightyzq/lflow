@@ -26,7 +26,7 @@ FetchContent_MakeAvailable(JUCE)
 # AFTER JUCE. Pinned by tag: bump deliberately, then re-run lflow_ui_snapshot and compare.
 FetchContent_Declare(zqsfx_ui
     GIT_REPOSITORY https://github.com/themightyzq/zqsfx_ui.git
-    GIT_TAG v0.4.0
+    GIT_TAG v0.5.0
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(zqsfx_ui)
 
@@ -152,7 +152,25 @@ target_link_libraries(lflow_preset_tests PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
+# Editor controls test: opens the real editor headlessly and walks its children. Every
+# parameter-bound slider must be a zqsfx::ui::Dial (keyboard focus, focus ring, Shift+arrow fine
+# step) and double-click must return it to the parameter's default. Same link pattern as
+# lflow_ui_snapshot; a plain console program (not Catch2) that skips itself off macOS.
+juce_add_console_app(lflow_editor_controls_tests PRODUCT_NAME "lflow_editor_controls_tests")
+target_sources(lflow_editor_controls_tests PRIVATE tests/EditorControlsTests.cpp)
+target_include_directories(lflow_editor_controls_tests PRIVATE
+    source source/params source/dsp source/gui source/shapes source/presets
+    $<TARGET_PROPERTY:LFlOw,JUCE_GENERATED_SOURCES_DIRECTORY>)
+target_link_libraries(lflow_editor_controls_tests PRIVATE
+    LFlOw
+    lflow_dsp
+    zqsfx::ui
+    juce::juce_audio_utils
+    juce::juce_dsp)
+
 include(CTest)
 include(Catch)
 catch_discover_tests(lflow_tests)
 catch_discover_tests(lflow_preset_tests)
+
+add_test(NAME LFlOwEditorControls COMMAND lflow_editor_controls_tests)

@@ -2,6 +2,14 @@
 
 Earlier releases are listed at https://github.com/themightyzq/lflow/releases.
 
+## Unreleased
+
+### Changed
+- Every knob and slider (each lane's Rate, Phase and Depth; Mix, Smooth, Xover Lo, Xover Hi)
+  now takes keyboard focus with a visible ring. Arrow keys step the value, Shift+arrow steps a
+  tenth as far, and a double-click returns the control to its default value. Layout and sound
+  are unchanged.
+
 ## 0.8.0 - 2026-10-01
 
 ### Changed (audible)

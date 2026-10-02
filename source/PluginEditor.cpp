@@ -24,17 +24,6 @@ constexpr LaneIds laneIds[3] = {
     { lflow::pid::l3Waveform, lflow::pid::l3Sync, lflow::pid::l3RateHz, lflow::pid::l3Division,
       lflow::pid::l3Rhythm, lflow::pid::l3Phase, lflow::pid::l3Depth, lflow::pid::l3Dest },
 };
-
-// Phase 7 Task 5: every knob's setDoubleClickReturnValue() reads its default straight off the
-// live APVTS parameter (AudioProcessorParameter::getDefaultValue(), which is normalized [0,1])
-// rather than a hardcoded literal, so this can never drift from ParameterLayout.cpp. Returns
-// 0.0f (a harmless no-op default) if the id is somehow unknown -- jassert catches that in debug.
-float paramDefault (juce::AudioProcessorValueTreeState& apvts, const char* paramId)
-{
-    auto* p = apvts.getParameter (paramId);
-    jassert (p != nullptr);
-    return p != nullptr ? p->convertFrom0to1 (p->getDefaultValue()) : 0.0f;
-}
 } // namespace
 
 // ---------------------------------------------------------------------- LaneChip
@@ -181,13 +170,6 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     styleRotary (smoothSlider, 46, 16);
     styleRotary (xoverLowSlider, 62, 16);  // wide enough for "2000 Hz" (finding #1)
     styleRotary (xoverHighSlider, 62, 16); // wide enough for "2500 Hz" (finding #1)
-    // Phase 7 Task 5 (UX #4): double-click-to-default on every global rotary, value pulled
-    // live from the APVTS parameter's own default (paramDefault helper, above) rather than
-    // hardcoded -- see that helper's doc comment.
-    mixSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::mix));
-    smoothSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::smooth));
-    xoverLowSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::xoverLow));
-    xoverHighSlider.setDoubleClickReturnValue (true, paramDefault (apvts, lflow::pid::xoverHigh));
     mixSlider.setTooltip ("Blend between dry and processed signal");
     smoothSlider.setTooltip ("Rounds off sharp waveform edges to avoid clicks");
     xoverLowSlider.setTooltip ("Crossover between the Low and Mid bands");
@@ -203,6 +185,13 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     smoothAtt    = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::smooth,    smoothSlider);
     xoverLowAtt  = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::xoverLow,  xoverLowSlider);
     xoverHighAtt = std::make_unique<APVTS::SliderAttachment> (apvts, lflow::pid::xoverHigh, xoverHighSlider);
+    // Double-click returns each global rotary to its parameter's own default (never a hardcoded
+    // literal, so it cannot drift from ParameterLayout.cpp). Must follow the attachments: they
+    // give the sliders their ranges.
+    zqsfx::ui::setDoubleClickDefault (mixSlider, apvts, lflow::pid::mix);
+    zqsfx::ui::setDoubleClickDefault (smoothSlider, apvts, lflow::pid::smooth);
+    zqsfx::ui::setDoubleClickDefault (xoverLowSlider, apvts, lflow::pid::xoverLow);
+    zqsfx::ui::setDoubleClickDefault (xoverHighSlider, apvts, lflow::pid::xoverHigh);
 
     // buttonOnColourId is no longer set here: the house drawButtonBackground always paints an
     // "on" TextButton as colour::accent regardless of this colour id (and Colors::primary is
@@ -234,6 +223,29 @@ LFlOwAudioProcessorEditor::LFlOwAudioProcessorEditor (LFlOwAudioProcessor& p)
     refreshEnablement();
     refreshXoverHint();
     refreshPresetBar();
+
+    // Keyboard (Tab) order in reading order: header, preset bar, each lane's row left to right,
+    // then the global row. Without it JUCE sorts the editor's children by y then x, and a knob
+    // that sits a few pixels above the combo boxes of its row would be reached before them (Phase
+    // and Depth ahead of Waveform, Sync and Rate), and Link would come last. Hidden or disabled
+    // controls are skipped by the traversal, so listing them all is safe.
+    {
+        using Controls = std::initializer_list<juce::Component*>;
+        int focusOrder = 1;
+        auto inOrder = [&focusOrder] (Controls controls)
+        {
+            for (auto* c : controls)
+                c->setExplicitFocusOrder (focusOrder++);
+        };
+        inOrder ({ &undoButton, &redoButton, &bypassButton, &logo,
+                   &presetPrevButton, &presetNextButton, &presetMenuButton,
+                   &slotAButton, &slotBButton, &copySlotButton, &renameButton });
+        for (auto& strip : laneStrips)
+            inOrder ({ &strip.editButton, &strip.waveformBox, &strip.syncButton, &strip.rateSlider,
+                       &strip.divisionBox, &strip.rhythmBox, &strip.phaseSlider, &strip.destBox,
+                       &strip.depthSlider });
+        inOrder ({ &linkButton, &mixSlider, &smoothSlider, &xoverLowSlider, &xoverHighSlider });
+    }
 
     setResizable (true, true);
     setResizeLimits (620, 560, 1000, 900);
@@ -701,14 +713,6 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     addAndMakeVisible (s.phaseSlider);
     addAndMakeVisible (s.depthSlider);
 
-    // Phase 7 Task 5 (UX #4): double-click-to-default on this lane's rotaries + the Rate
-    // slider, each pulled from that lane's OWN APVTS parameter default (paramDefault helper) --
-    // depth's default differs per lane (Lane 1 50%, Lanes 2-3 0%, see ParameterLayout.cpp), so
-    // hardcoding a single literal here would be wrong for 2 of the 3 lanes.
-    s.phaseSlider.setDoubleClickReturnValue (true, paramDefault (apvts, ids.phase));
-    s.depthSlider.setDoubleClickReturnValue (true, paramDefault (apvts, ids.depth));
-    s.rateSlider.setDoubleClickReturnValue (true, paramDefault (apvts, ids.rateHz));
-
     s.waveformBox.setTooltip (laneName + ": shape of the LFO motion");
     s.syncButton.setTooltip  (laneName + ": lock this lane's speed to host tempo");
     s.rateSlider.setTooltip  (laneName + ": LFO speed in Hz when Sync is off");
@@ -741,6 +745,13 @@ void LFlOwAudioProcessorEditor::buildLaneStrip (int i)
     s.rateAtt     = std::make_unique<APVTS::SliderAttachment>   (apvts, ids.rateHz,   s.rateSlider);
     s.phaseAtt    = std::make_unique<APVTS::SliderAttachment>   (apvts, ids.phase,    s.phaseSlider);
     s.depthAtt    = std::make_unique<APVTS::SliderAttachment>   (apvts, ids.depth,    s.depthSlider);
+
+    // Double-click-to-default on this lane's rotaries and Rate slider, each from that lane's OWN
+    // parameter default: Depth's differs per lane (Lane 1 50%, Lanes 2-3 0%, see
+    // ParameterLayout.cpp). Must follow the attachments, which give the sliders their ranges.
+    zqsfx::ui::setDoubleClickDefault (s.rateSlider, apvts, ids.rateHz);
+    zqsfx::ui::setDoubleClickDefault (s.phaseSlider, apvts, ids.phase);
+    zqsfx::ui::setDoubleClickDefault (s.depthSlider, apvts, ids.depth);
 
     // lastWaveform is seeded AFTER waveformAtt's construction (its sendInitialUpdate already
     // synced the combo to whatever the processor's current/restored state holds) and onChange
